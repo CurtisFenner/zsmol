@@ -122,7 +122,19 @@ pub fn Combinators(comptime Token: type) type {
             /// `"Expected a `)` to finish a function call"`.
             cut_message: ?[]const u8,
 
-            fn _type(comptime field: Field) type {
+            fn preparedType(comptime self: Field) type {
+                if (comptime self.max_take_count == 1) {
+                    if (comptime self.min_take_count == 0) {
+                        if (comptime self.isSubstitutedOpt()) |ST| {
+                            return ST;
+                        }
+                    }
+                }
+
+                return self.rawType();
+            }
+
+            fn rawType(comptime field: Field) type {
                 if (field.max_take_count == 1) {
                     if (field.min_take_count == 0) {
                         return ?field.CT;
@@ -131,6 +143,48 @@ pub fn Combinators(comptime Token: type) type {
                 } else {
                     return []const field.CT;
                 }
+            }
+
+            fn prepare(comptime self: Field, allocator: *std.mem.Allocator, field_value: self.rawType()) self.preparedType() {
+                if (comptime self.max_take_count == 1) {
+                    if (comptime self.min_take_count == 0) {
+                        if (comptime self.isSubstitutedOpt()) |ST| {
+                            return self.CT.substituteOpt(allocator, field_value);
+                        }
+                    }
+                }
+                return field_value;
+            }
+
+            fn pleaseDeinit(comptime self: Field, allocator: *std.mem.Allocator, field_value: var) void {
+                // Treat mapped types specially
+                if (comptime self.isSubstitutedOpt()) |ST| {
+                    self.CT.deallocOpt(allocator, field_value);
+                } else if (comptime self.max_take_count == 1) {
+                    if (self.min_take_count == 0) {
+                        if (field_value) |present| {
+                            self.CT.Parser.deinit(allocator, present);
+                        }
+                    } else {
+                        self.CT.Parser.deinit(allocator, field_value);
+                    }
+                } else {
+                    for (field_value) |element| {
+                        self.CT.Parser.deinit(allocator, element);
+                    }
+                    allocator.free(field_value);
+                }
+            }
+
+            fn isSubstitutedOpt(comptime field: Field) ?type {
+                inline for (std.meta.declarations(field.CT)) |decl| {
+                    if (comptime field.min_take_count == 0 and field.max_take_count == 1) {
+                        if (comptime std.mem.eql(u8, decl.name, "substituteOpt")) {
+                            return decl.data.Fn.return_type;
+                        }
+                    }
+                }
+                return null;
             }
         };
         const grammar = @This();
@@ -327,20 +381,7 @@ pub fn Combinators(comptime Token: type) type {
                         if (i < first) {
                             if (comptime !std.mem.eql(u8, "_", field.name)) {
                                 const field_value = @field(self, field.name);
-                                if (field.max_take_count == 1) {
-                                    if (field.min_take_count == 0) {
-                                        if (field_value) |present| {
-                                            field.CT.Parser.deinit(allocator, present);
-                                        }
-                                    } else {
-                                        field.CT.Parser.deinit(allocator, field_value);
-                                    }
-                                } else {
-                                    for (field_value) |element| {
-                                        field.CT.Parser.deinit(allocator, element);
-                                    }
-                                    allocator.free(field_value);
-                                }
+                                field.pleaseDeinit(allocator, field_value);
                             }
                         }
                     }
@@ -383,17 +424,17 @@ pub fn Combinators(comptime Token: type) type {
                     }
 
                     inline for (fields) |field, fi| {
-                        var subAST: field._type() = undefined;
+                        var subAST: field.preparedType() = undefined;
                         // Parse the field.
                         if (field.max_take_count == 1) {
                             // Parse a required/optional field.
                             if (field.CT.Parser._parse(allocator, stream, from + consumed, parse_error)) |subresult| {
-                                subAST = subresult.value;
+                                subAST = field.prepare(allocator, subresult.value);
                                 consumed += subresult.consumed;
                             } else |err| switch (err) {
                                 error.NoMatch => {
-                                    if (field.min_take_count == 0) {
-                                        subAST = null;
+                                    if (comptime field.min_take_count == 0) {
+                                        subAST = field.prepare(allocator, null);
                                     } else {
                                         if (field.cut_message) |cut_message| {
                                             var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
@@ -465,7 +506,7 @@ pub fn Combinators(comptime Token: type) type {
                                 }
                                 return error.NoMatch;
                             }
-                            subAST = list.toOwnedSlice();
+                            subAST = field.prepare(allocator, list.toOwnedSlice());
                         }
 
                         // Attach the sub-result onto the AST.
