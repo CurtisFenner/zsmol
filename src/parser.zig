@@ -57,6 +57,158 @@ pub const Location = struct {
             .end = end.end,
         };
     }
+
+    const LINE_NUM_WIDTH: usize = 10;
+    const LINE_CONTEXT: usize = 1;
+    const TAB_SIZE: usize = 4;
+
+    pub fn printPosition(location: Location, file: var) !void {
+        var start_line: usize = undefined;
+        var start_column: usize = undefined;
+        var end_line: usize = 1;
+        var end_column: usize = 1;
+
+        for (location.blob.content) |c, i| {
+            if (i == location.begin) {
+                start_line = end_line;
+                start_column = end_column;
+            }
+            if (i == location.end) {
+                break;
+            }
+
+            if (c == '\n') {
+                end_line += 1;
+                end_column = 1;
+            } else if (c == '\r') {
+                // Ignore
+            } else if (c == '\t') {
+                end_column += TAB_SIZE - end_column % TAB_SIZE;
+            } else {
+                end_column += 1;
+            }
+        }
+
+        try file.write(location.blob.name);
+        try file.write(":");
+        var buffer = [_]u8{0} ** 32;
+        var width: usize = undefined;
+        width = std.fmt.formatIntBuf(&buffer, start_line, 10, false, 0);
+        try file.write(buffer[0..width]);
+        try file.write(":");
+        width = std.fmt.formatIntBuf(&buffer, start_column, 10, false, 0);
+        try file.write(buffer[0..width]);
+        try file.write("-");
+        width = std.fmt.formatIntBuf(&buffer, end_line, 10, false, 0);
+        try file.write(buffer[0..width]);
+        try file.write(":");
+        width = std.fmt.formatIntBuf(&buffer, end_column, 10, false, 0);
+        try file.write(buffer[0..width]);
+    }
+
+    pub fn printExcerpt(location: Location, file: var) !void {
+        var line: usize = 0;
+        var line_begin: usize = undefined;
+        var line_end: usize = undefined;
+        for (location.blob.content) |c, i| {
+            if (i == location.begin) {
+                line_begin = line;
+            }
+            if (i == location.end) {
+                line_end = line;
+            }
+            if (c == '\n') {
+                line += 1;
+            }
+        }
+
+        line = 0;
+        var column: usize = 0;
+        var beginning_of_line = true;
+        var caret_low: ?usize = null;
+        var caret_high: usize = 0;
+        for (location.blob.content) |c, i| {
+            const should_draw_line = line_begin <= line + LINE_CONTEXT and line <= line_end + LINE_CONTEXT;
+            if (should_draw_line and beginning_of_line) {
+                var buffer = [_]u8{0} ** 32;
+                const width = std.fmt.formatIntBuf(&buffer, line + 1, 10, false, 0);
+                var padding = LINE_NUM_WIDTH - width;
+                while (padding != 0) {
+                    try file.write(" ");
+                    padding -= 1;
+                }
+                try file.write(buffer[0..width]);
+                try file.write(" | ");
+                beginning_of_line = false;
+            }
+
+            if (c == '\n') {
+                column = 0;
+                line += 1;
+                beginning_of_line = true;
+                if (should_draw_line) {
+                    try file.write("\n");
+                }
+            } else if (c == '\t') {
+                const previous_column = column;
+                column += TAB_SIZE - column % TAB_SIZE;
+                var actual_tab_width = column - previous_column;
+                if (should_draw_line) {
+                    while (actual_tab_width != 0) {
+                        try file.write(" ");
+                        actual_tab_width -= 1;
+                    }
+                }
+            } else if (c == '\r') {
+                // Do nothing
+            } else {
+                if (should_draw_line) {
+                    var rep: u8 = undefined;
+                    if (32 <= c and c <= 127) {
+                        rep = c;
+                    } else {
+                        rep = '?';
+                    }
+                    try file.write([_]u8{rep});
+                    if (rep != ' ' and location.begin <= i and i < location.end) {
+                        if (caret_low == null) {
+                            caret_low = column;
+                        }
+                        caret_high = column;
+                    }
+                }
+                column += 1;
+            }
+
+            if (i == location.blob.content.len - 1 and should_draw_line) {
+                // Insert an artificial line break if the file doesn't end with
+                // one.
+                try file.write("\n");
+                beginning_of_line = true;
+            }
+
+            if (should_draw_line and beginning_of_line) {
+                // Draw carets
+                if (caret_low) |low| {
+                    try file.write(" " ** LINE_NUM_WIDTH);
+                    try file.write(" | ");
+                    var pad = low;
+                    while (pad != 0) {
+                        try file.write(" ");
+                        pad -= 1;
+                    }
+                    var width = caret_high + 1 - low;
+                    while (width != 0) {
+                        try file.write("^");
+                        width -= 1;
+                    }
+                    try file.write("\n");
+                }
+                caret_low = null;
+                caret_high = undefined;
+            }
+        }
+    }
 };
 
 /// A ParseErrorMessage represents an error message produced when parsing.
@@ -67,6 +219,21 @@ pub const ParseErrorMessage = struct {
     };
 
     entries: []const Entry,
+
+    pub fn render(e: ParseErrorMessage, file: var) !void {
+        try file.write("ERROR: ");
+        for (e.entries) |entry| {
+            switch (entry) {
+                .Text => |t| try file.write(t),
+                .AtLocation => |loc| {
+                    try file.write(" at ");
+                    try loc.printPosition(file);
+                    try file.write(":\n");
+                    try loc.printExcerpt(file);
+                },
+            }
+        }
+    }
 };
 
 const ParseErrors = error{
@@ -275,6 +442,19 @@ pub fn Combinators(comptime Token: type) type {
                 };
             }
 
+            fn starSep(comptime self: Fluent, comptime name: []const u8, comptime CT: type, comptime comma: type) Fluent {
+                return Fluent{
+                    .fields = self.fields ++ [_]Field{Field{
+                        .name = name,
+                        .CT = CT,
+                        .min_take_count = 0,
+                        .max_take_count = 0,
+                        .separator = comma,
+                        .cut_message = null,
+                    }},
+                };
+            }
+
             /// Plus 1 or more entries of the same type, each separated by the
             /// given separator AST. The separators are dropped from the
             /// resulting value.
@@ -455,6 +635,9 @@ pub fn Combinators(comptime Token: type) type {
                             }
                         } else {
                             // Parse a repeated field.
+                            if (comptime @alignOf(field.CT) == 0) {
+                                @compileLog("Empty struct:", field.CT);
+                            }
                             var list = std.ArrayList(field.CT).init(allocator);
                             while (true) {
                                 // Parse a separator, if any.
