@@ -641,11 +641,13 @@ pub fn Combinators(comptime Token: type) type {
                             var list = std.ArrayList(field.CT).init(allocator);
                             while (true) {
                                 // Parse a separator, if any.
+                                var sep_consumed: usize = 0;
                                 if (field.separator) |sep| {
                                     if (list.count() != 0) {
                                         if (sep.Parser._parse(allocator, stream, from + consumed, parse_error)) |subresult| {
                                             sep.Parser.deinit(allocator, subresult.value);
                                             consumed += subresult.consumed;
+                                            sep_consumed = subresult.consumed;
                                         } else |err| switch (err) {
                                             error.NoMatch => {
                                                 break;
@@ -666,6 +668,7 @@ pub fn Combinators(comptime Token: type) type {
                                     consumed += subresult.consumed;
                                 } else |err| switch (err) {
                                     error.NoMatch => {
+                                        consumed -= sep_consumed;
                                         break;
                                     },
                                     error.ParseError => {
@@ -675,8 +678,6 @@ pub fn Combinators(comptime Token: type) type {
                                         return err;
                                     },
                                 }
-
-                                assert(field.separator == null);
                             }
 
                             if (list.count() < field.min_take_count) {
