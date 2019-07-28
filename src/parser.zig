@@ -517,7 +517,7 @@ pub fn Combinators(comptime Token: type) type {
                 pub fn deinit(allocator: *std.mem.Allocator, self: Into) void {
                     const TagType = @TagType(Into);
                     inline for (std.meta.fields(Into)) |field| {
-                        if (@enumToInt(TagType(self)) == field.enum_field.?.value) {
+                        if (@enumToInt(std.meta.activeTag(self)) == field.enum_field.?.value) {
                             var subvalue = @field(self, field.name);
                             @typeOf(subvalue.*).Parser.deinit(allocator, subvalue.*);
                             allocator.destroy(@field(self, field.name));
@@ -528,6 +528,7 @@ pub fn Combinators(comptime Token: type) type {
                 pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize, parse_error: *ParseErrorMessage) InternalParseErrors!InternalParseResult(Into) {
                     @setRuntimeSafety(false);
                     inline for (std.meta.fields(Into)) |field| {
+                        // Members of choice unions must be pointers to const.
                         const FieldType = @typeInfo(field.field_type).Pointer.child;
                         if (FieldType.Parser._parse(allocator, stream, from, parse_error)) |result| {
                             var field_value = try allocator.create(FieldType);
@@ -575,7 +576,7 @@ pub fn Combinators(comptime Token: type) type {
                     var result = @This()._parse(allocator, stream, 0, parse_error) catch |err| switch (err) {
                         error.NoMatch => {
                             var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                            entries[0] = ParseErrorMessage.Entry{ .Text = "Expected (thing)" };
+                            entries[0] = ParseErrorMessage.Entry{ .Text = "Expected " ++ @typeName(Into) };
                             entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[0] };
                             parse_error.* = ParseErrorMessage{ .entries = entries };
                             return error.ParseError;
@@ -586,7 +587,7 @@ pub fn Combinators(comptime Token: type) type {
 
                     if (result.consumed != stream.tokens.len) {
                         var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                        entries[0] = ParseErrorMessage.Entry{ .Text = "Unexpected end to (thing)" };
+                        entries[0] = ParseErrorMessage.Entry{ .Text = "Unexpected end to " ++ @typeName(Into) };
                         entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[result.consumed] };
                         parse_error.* = ParseErrorMessage{ .entries = entries };
                         return error.ParseError;
@@ -635,11 +636,10 @@ pub fn Combinators(comptime Token: type) type {
                             }
                         } else {
                             // Parse a repeated field.
-                            if (comptime @alignOf(field.CT) == 0) {
-                                @compileLog("Empty struct:", field.CT);
-                            }
                             var list = std.ArrayList(field.CT).init(allocator);
-                            while (true) {
+
+                            var truth = true;
+                            while (truth) {
                                 // Parse a separator, if any.
                                 var sep_consumed: usize = 0;
                                 if (field.separator) |sep| {
@@ -680,7 +680,8 @@ pub fn Combinators(comptime Token: type) type {
                                 }
                             }
 
-                            if (list.count() < field.min_take_count) {
+                            var enough = list.count() >= field.min_take_count;
+                            if (!enough) {
                                 if (field.cut_message) |cut_message| {
                                     var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
                                     entries[0] = ParseErrorMessage.Entry{ .Text = cut_message };
@@ -716,4 +717,36 @@ pub fn Combinators(comptime Token: type) type {
         /// The `fluent` instance is the start for the Fluent interface.
         pub const fluent = Fluent{ .fields = [_]Field{} };
     };
+}
+
+test "Separator" {
+    const Token = union(enum) {
+        A: void,
+        B: void,
+    };
+    const comb = Combinators(Token);
+
+    const A = struct {
+        value: void,
+        const Parser = comb.TokenParser(@This(), Token.A);
+        location: Location,
+    };
+    const B = struct {
+        value: void,
+        const Parser = comb.TokenParser(@This(), Token.B);
+        location: Location,
+    };
+
+    const C = struct {
+        list: []const A,
+        const Parser = comb.fluent.plusSep("list", A, B).seq(@This());
+        location: Location,
+    };
+
+    const stream = comb.Stream{
+        .tokens = [_]Token{Token{ .A = {} }},
+        .locations = [_]Location{ undefined, undefined },
+    };
+
+    const result = try C.Parser.parse(std.debug.global_allocator, stream, undefined);
 }
