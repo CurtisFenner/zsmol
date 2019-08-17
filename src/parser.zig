@@ -8,34 +8,6 @@ const ArrayList = std.ArrayList;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-/// Source: https://github.com/ziglang/zig/blob/987c209b407f8379fd58381dcd3975982dfccdaf/std/io.zig#L1181
-/// TODO: Replace this with @unionInit (https://github.com/ziglang/zig/issues/1315)
-fn setTag(ptr: var, tag: var) void {
-    const T = @typeOf(ptr);
-    const U = std.meta.Child(T);
-
-    const info = @typeInfo(U).Union;
-    if (info.tag_type) |TagType| {
-        comptime assert(TagType == @typeOf(tag));
-
-        var ptr_tag = ptr: {
-            if (@alignOf(TagType) >= @alignOf(U)) break :ptr @ptrCast(*TagType, ptr);
-            const offset = comptime max: {
-                var max_field_size: comptime_int = 0;
-                for (info.fields) |field_info| {
-                    const field_size = @sizeOf(field_info.field_type);
-                    max_field_size = std.math.max(max_field_size, field_size);
-                }
-                break :max std.math.max(max_field_size, @alignOf(U));
-            };
-            break :ptr @intToPtr(*TagType, @ptrToInt(ptr) + offset);
-        };
-        ptr_tag.* = tag;
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
 /// A Blob represents an in-memory representation of a source.
 /// This is used for generating error messages that include context.
 pub const Blob = struct {
@@ -534,12 +506,7 @@ pub fn Combinators(comptime Token: type) type {
                             var field_value = try allocator.create(FieldType);
                             field_value.* = result.value;
 
-                            // TODO: Remove setRuntimeSafety(false); Blocked by https://github.com/ziglang/zig/issues/1315
-                            var choice: Into = undefined;
-                            {
-                                setTag(&choice, @field(Into, field.name));
-                                @field(choice, field.name) = field_value;
-                            }
+                            var choice: Into = @unionInit(Into, field.name, field_value);
                             return InternalParseResult(Into){
                                 .value = choice,
                                 .consumed = result.consumed,
