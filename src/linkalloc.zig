@@ -4,15 +4,22 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
+/// MaxHeap is an unresizable priority queue / max heap.
+/// In addition to popMax() and push(), MaxHeap allows you to remove an object
+/// at a given index.
+/// Users of the MaxHeap are notified of updates to the heap so that they can
+/// efficiently keep track of indexes for removal.
 fn MaxHeap(comptime T: type) type {
     return struct {
         const Self = @This();
         items: []T,
         size: usize,
 
-        fn init(self: *Self, items: []T) void {
-            self.items = items;
-            self.size = 0;
+        fn init(items: []T) Self {
+            return Self{
+                .items = items,
+                .size = 0,
+            };
         }
 
         /// RETURNS true when this heap is empty, and no more elements can be
@@ -211,8 +218,7 @@ const MaxHeapTest = struct {
 test "MaxHeap" {
     var storage: [8]usize = undefined;
     var checker = MaxHeapTest{};
-    var heap: MaxHeap(usize) = undefined;
-    MaxHeap(usize).init(&heap, storage[0..]);
+    var heap = MaxHeap(usize).init(storage[0..]);
 
     assert(heap.isEmpty());
     checker.push(&heap, 13);
@@ -261,10 +267,6 @@ pub const LinkAllocator = struct {
     /// organized as a complete binary heap.
     open_heap: MaxHeap(usize),
 
-    /// The storage, interleaved with bookkeeping, for all managed objects.
-    /// Does not overlap with the open heap.
-    data: []u8,
-
     /// The data_buffer, viewed as a sequence of usize.
     data_as_words: []usize,
 
@@ -296,13 +298,14 @@ pub const LinkAllocator = struct {
     }
 
     inline fn sliceInitialWord(self: *LinkAllocator, slice: []const u8) usize {
-        const difference = @ptrToInt(slice.ptr) - @ptrToInt(self.data.ptr);
+        const difference = @ptrToInt(slice.ptr) - @ptrToInt(self.data_as_words.ptr);
         assert(difference % min_align == 0);
         return difference / min_align;
     }
 
     inline fn getBytes(self: *LinkAllocator, block: Block) []u8 {
-        return self.data[@sizeOf(usize) * (block.first_word + 2) .. @sizeOf(usize) * (block.end_word - 1)];
+        var data = @sliceToBytes(self.data_as_words);
+        return data[@sizeOf(usize) * (block.first_word + 2) .. @sizeOf(usize) * (block.end_word - 1)];
     }
 
     inline fn updateOpenBlockLocation(self: *LinkAllocator, block_first_word: usize, new_location: ?usize) void {
@@ -319,13 +322,14 @@ pub const LinkAllocator = struct {
         self.updateOpenBlockLocation(block_word, heap_location);
     }
 
+    /// smaller compares two free blocks by their size.
     fn smaller(self: *LinkAllocator, block_word_a: usize, block_word_b: usize) bool {
         const size_a = self.data_as_words[block_word_a] - block_word_a;
         const size_b = self.data_as_words[block_word_b] - block_word_b;
         return size_a < size_b;
     }
 
-    pub fn init(self: *LinkAllocator, unaligned_buffer: []u8) void {
+    pub fn init(unaligned_buffer: []u8) LinkAllocator {
         // Shrink both ends of the given buffer to the alignment of usize.
         const unaligned_base = @ptrToInt(unaligned_buffer.ptr);
         const aligned_from = std.mem.alignForward(unaligned_base, min_align) - unaligned_base;
@@ -334,21 +338,28 @@ pub const LinkAllocator = struct {
         std.mem.set(u8, buffer, 127);
 
         var buffer_as_words = @alignCast(min_align, @bytesToSlice(usize, buffer));
-        self.max_objects = buffer_as_words.len / 5;
+        const max_objects = buffer_as_words.len / 5;
 
-        MaxHeap(usize).init(&self.open_heap, buffer_as_words[0 .. self.max_objects + 1]);
-        self.data_as_words = buffer_as_words[self.max_objects + 1 ..];
-        self.data = @sliceToBytes(self.data_as_words);
-        self.num_objects = 0;
-        self.allocator = Allocator{ .reallocFn = realloc, .shrinkFn = shrink };
+        var open_heap = MaxHeap(usize).init(buffer_as_words[0 .. max_objects + 1]);
+        var data_as_words = buffer_as_words[max_objects + 1 ..];
+
+        var self = LinkAllocator{
+            .allocator = Allocator{ .reallocFn = realloc, .shrinkFn = shrink },
+            .open_heap = open_heap,
+            .num_objects = 0,
+            .max_objects = max_objects,
+            .data_as_words = data_as_words,
+        };
 
         // Pointer to end of block
         self.data_as_words[0] = self.data_as_words.len;
         // Pointer to beginning of block
         self.data_as_words[self.data_as_words.len - 1] = 0;
-        self.open_heap.push(0, self);
+        self.open_heap.push(0, &self);
         // Position in open heap
         assert(self.data_as_words[1] == 0);
+
+        return self;
     }
 
     fn realloc(allocator: *Allocator, old_mem: []u8, old_align: u29, new_size: usize, req_new_align: u29) ![]u8 {
@@ -491,8 +502,7 @@ pub const LinkAllocator = struct {
 test "simple" {
     var buffer = [_]u8{0} ** 240;
     std.debug.warn("\n");
-    var la: LinkAllocator = undefined;
-    LinkAllocator.init(&la, buffer[0..]);
+    var la = LinkAllocator.init(buffer[0..]);
     var allocator = &la.allocator;
 
     la.describe();
