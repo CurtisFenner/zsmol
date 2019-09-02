@@ -4,17 +4,15 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
-fn MaxHeap(comptime T: type, comptime N: type) type {
+fn MaxHeap(comptime T: type) type {
     return struct {
         const Self = @This();
         items: []T,
         size: usize,
-        notifier: N,
 
-        fn init(self: *Self, items: []T, notifier: N) void {
+        fn init(self: *Self, items: []T) void {
             self.items = items;
             self.size = 0;
-            self.notifier = notifier;
         }
 
         /// RETURNS true when this heap is empty, and no more elements can be
@@ -39,50 +37,50 @@ fn MaxHeap(comptime T: type, comptime N: type) type {
         /// MODIFIES this heap to remove the largest element.
         /// RETURNS what was the largest element in this heap.
         /// REQUIRES this heap is not empty.
-        fn popMax(self: *Self) T {
+        fn popMax(self: *Self, notifier: var) T {
             assert(self.size != 0);
             const max = self.items[0];
             const last = self.items[self.size - 1];
             self.size -= 1;
             if (self.size != 0) {
                 self.items[0] = last;
-                self.bubbleDown(0);
+                self.bubbleDown(0, notifier);
             }
             return max;
         }
 
         /// MODIFIES this heap to contain the given value.
         /// REQUIRES this heap is not full.
-        fn push(self: *Self, value: T) void {
+        fn push(self: *Self, value: T, notifier: var) void {
             assert(self.size < self.items.len);
             self.items[self.size] = value;
             self.size += 1;
-            self.bubbleUp(self.size - 1);
+            self.bubbleUp(self.size - 1, notifier);
         }
 
         /// MODIFIES this heap to no longer contain the value at the given
         /// index.
         /// REQUIRES the given index is in-bounds.
-        fn removeIndex(self: *Self, index: usize) T {
+        fn removeIndex(self: *Self, index: usize, notifier: var) T {
             assert(0 <= index and index < self.size);
             if (index == 0) {
-                return self.popMax();
+                return self.popMax(notifier);
             }
             const value = self.items[index];
             assert(self.size != 1);
             var last = self.items[self.size - 1];
             self.items[index] = last;
-            self.notify(index);
+            self.notify(index, notifier);
             self.size -= 1;
 
             // Only one of these will change anything.
-            self.bubbleDown(index);
-            self.bubbleUp(index);
+            self.bubbleDown(index, notifier);
+            self.bubbleUp(index, notifier);
             return value;
         }
 
         /// The indicated index hold a value 'smaller' than its children.
-        fn bubbleDown(self: *Self, first_index: usize) void {
+        fn bubbleDown(self: *Self, first_index: usize, notifier: var) void {
             var index = first_index;
             while (true) {
                 var left_index = 2 * index + 1;
@@ -91,52 +89,52 @@ fn MaxHeap(comptime T: type, comptime N: type) type {
                     // One or two children.
                     var bigger = self.items[left_index];
                     var bigger_index = left_index;
-                    if (right_index < self.size and self.notifier.smaller(bigger, self.items[right_index])) {
+                    if (right_index < self.size and notifier.smaller(bigger, self.items[right_index])) {
                         bigger = self.items[right_index];
                         bigger_index = right_index;
                     }
-                    if (self.notifier.smaller(self.items[index], bigger)) {
+                    if (notifier.smaller(self.items[index], bigger)) {
                         std.mem.swap(T, &self.items[index], &self.items[bigger_index]);
-                        self.notify(index);
+                        self.notify(index, notifier);
                         index = bigger_index;
                     } else {
-                        self.notify(index);
+                        self.notify(index, notifier);
                         return;
                     }
                 } else {
                     // No children.
-                    self.notify(index);
+                    self.notify(index, notifier);
                     return;
                 }
             }
         }
 
         /// The indicated index may hold a value 'bigger' than its parent.
-        fn bubbleUp(self: *Self, first_index: usize) void {
+        fn bubbleUp(self: *Self, first_index: usize, notifier: var) void {
             var index = first_index;
             while (0 < index) {
                 var parent_index = (index - 1) / 2;
-                if (self.notifier.smaller(self.items[parent_index], self.items[index])) {
+                if (notifier.smaller(self.items[parent_index], self.items[index])) {
                     std.mem.swap(T, &self.items[parent_index], &self.items[index]);
-                    self.notify(index);
+                    self.notify(index, notifier);
                     index = parent_index;
                 } else {
-                    self.notify(index);
+                    self.notify(index, notifier);
                     return;
                 }
             }
-            self.notify(0);
+            self.notify(0, notifier);
         }
 
-        fn notify(self: *Self, index: usize) void {
-            self.notifier.notify(self.items[index], index);
+        fn notify(self: *Self, index: usize, notifier: var) void {
+            notifier.notify(self.items[index], index);
         }
     };
 }
 
 const MaxHeapTest = struct {
     const Self = @This();
-    const Heap = MaxHeap(usize, *Self);
+    const Heap = MaxHeap(usize);
     locations: [100]?usize = [1]?usize{null} ** 100,
 
     const Notifier = struct {
@@ -185,13 +183,13 @@ const MaxHeapTest = struct {
     }
 
     fn push(self: *Self, heap: *Heap, value: usize) void {
-        heap.push(value);
+        heap.push(value, self);
         self.check(heap);
         assert(!heap.isEmpty());
     }
 
     fn pop(self: *Self, heap: *Heap, expected: usize) void {
-        const got = heap.popMax();
+        const got = heap.popMax(self);
         if (expected != got) {
             std.debug.warn("\nExpected popMax() to return {} but got {}\n", expected, got);
             assert(false);
@@ -203,7 +201,7 @@ const MaxHeapTest = struct {
 
     fn remove(self: *Self, heap: *Heap, value: usize) void {
         var location = self.locations[value].?;
-        assert(value == heap.removeIndex(location));
+        assert(value == heap.removeIndex(location, self));
         self.locations[value] = null;
         self.check(heap);
         assert(!heap.isFull());
@@ -213,8 +211,8 @@ const MaxHeapTest = struct {
 test "MaxHeap" {
     var storage: [8]usize = undefined;
     var checker = MaxHeapTest{};
-    var heap: MaxHeap(usize, *MaxHeapTest) = undefined;
-    MaxHeap(usize, *MaxHeapTest).init(&heap, storage[0..], &checker);
+    var heap: MaxHeap(usize) = undefined;
+    MaxHeap(usize).init(&heap, storage[0..]);
 
     assert(heap.isEmpty());
     checker.push(&heap, 13);
@@ -261,7 +259,7 @@ pub const LinkAllocator = struct {
 
     /// The offsets into the heap of the open datablocks,
     /// organized as a complete binary heap.
-    open_heap: MaxHeap(usize, *LinkAllocator),
+    open_heap: MaxHeap(usize),
 
     /// The storage, interleaved with bookkeeping, for all managed objects.
     /// Does not overlap with the open heap.
@@ -338,7 +336,7 @@ pub const LinkAllocator = struct {
         var buffer_as_words = @alignCast(min_align, @bytesToSlice(usize, buffer));
         self.max_objects = buffer_as_words.len / 5;
 
-        MaxHeap(usize, *LinkAllocator).init(&self.open_heap, buffer_as_words[0 .. self.max_objects + 1], self);
+        MaxHeap(usize).init(&self.open_heap, buffer_as_words[0 .. self.max_objects + 1]);
         self.data_as_words = buffer_as_words[self.max_objects + 1 ..];
         self.data = @sliceToBytes(self.data_as_words);
         self.num_objects = 0;
@@ -348,7 +346,7 @@ pub const LinkAllocator = struct {
         self.data_as_words[0] = self.data_as_words.len;
         // Pointer to beginning of block
         self.data_as_words[self.data_as_words.len - 1] = 0;
-        self.open_heap.push(0);
+        self.open_heap.push(0, self);
         // Position in open heap
         assert(self.data_as_words[1] == 0);
     }
@@ -380,7 +378,7 @@ pub const LinkAllocator = struct {
             // space.
             return error.OutOfMemory;
         }
-        _ = self.open_heap.popMax();
+        _ = self.open_heap.popMax(self);
         var usable = internal[metadata_size..];
         const data_word_start = self.sliceInitialWord(usable);
         var data = usable[0..new_size];
@@ -394,7 +392,7 @@ pub const LinkAllocator = struct {
 
             self.data_as_words[post_word_start] = open_block.end_word;
             self.data_as_words[open_block.end_word - 1] = post_word_start;
-            self.open_heap.push(post_word_start);
+            self.open_heap.push(post_word_start, self);
         }
 
         // TODO: For allocations with large alignments, a lot of space could be
@@ -437,7 +435,7 @@ pub const LinkAllocator = struct {
             const previous_block = self.readBlock(previous_block_start);
             if (previous_block.open_heap_location) |previous_block_open_heap_location| {
                 // The previous block is open and should be merged with this block.
-                _ = self.open_heap.removeIndex(previous_block_open_heap_location);
+                _ = self.open_heap.removeIndex(previous_block_open_heap_location, self);
                 block_start = previous_block.first_word;
                 self.data_as_words[block_start] = block_end;
                 self.data_as_words[block_end - 1] = block_start;
@@ -448,7 +446,7 @@ pub const LinkAllocator = struct {
             const next_block = self.readBlock(block_end);
             if (next_block.open_heap_location) |next_block_open_heap_location| {
                 // The next block is open and should be merged with this block.
-                _ = self.open_heap.removeIndex(next_block_open_heap_location);
+                _ = self.open_heap.removeIndex(next_block_open_heap_location, self);
                 block_end = next_block.end_word;
                 self.data_as_words[block_start] = block_end;
                 self.data_as_words[block_end - 1] = block_start;
@@ -456,7 +454,7 @@ pub const LinkAllocator = struct {
         }
 
         self.num_objects -= 1;
-        self.open_heap.push(block_start);
+        self.open_heap.push(block_start, self);
     }
 
     fn isEmpty(self: *const LinkAllocator) bool {
