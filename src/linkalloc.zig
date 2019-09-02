@@ -419,8 +419,9 @@ pub const LinkAllocator = struct {
         return data;
     }
 
-    fn shrink(allocator: *Allocator, old_mem: []u8, old_align: u29, new_size: usize, req_new_align: u29) []u8 {
+    fn shrink(allocator: *Allocator, old_mem: []u8, req_old_align: u29, new_size: usize, req_new_align: u29) []u8 {
         var new_align = if (req_new_align < min_align) min_align else req_new_align;
+        var old_align = if (req_old_align < min_align) min_align else req_old_align;
 
         const self = @fieldParentPtr(LinkAllocator, "allocator", allocator);
         assert(new_align <= old_align);
