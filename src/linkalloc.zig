@@ -407,15 +407,15 @@ pub const LinkAllocator = struct {
         }
         if (self.open_heap.isEmpty() or self.num_objects == self.max_objects) {
             return error.OutOfMemory;
-        } else if (self.getUsableAmount(self.open_heap.getMax(), new_size, new_align) == null) {
-            return error.OutOfMemory;
         }
         // Start from the largest block, and move to smaller children as
         // necessary.
         var index: usize = 0;
         var result: ?Usable = null;
-        // TODO: We need to choose the bigger of the two children, so that the
-        // entire tree is used.
+
+        // We want to find a small block that fits the given allocation.
+        // However, we choose the larger child to ensure we use all blocks
+        // evenly.
         while (index < self.open_heap.size) {
             result = self.getUsableAmount(self.open_heap.items[index], new_size, new_align) orelse break;
             index = self.open_heap.largerChild(index, self) orelse break;
@@ -555,35 +555,36 @@ test "simple" {
     var la = LinkAllocator.init(buffer[0..]);
     var allocator = &la.allocator;
 
-    la.describe();
+    // la.describe();
 
     var obj1 = try allocator.alloc(usize, 2);
     obj1[0] = 111;
     obj1[1] = 222;
 
-    la.describe();
+    // la.describe();
 
     var obj2 = try allocator.alloc(usize, 3);
     obj2[0] = 333;
     obj2[1] = 444;
     obj2[2] = 555;
 
-    la.describe();
+    // la.describe();
 
     var obj3 = try allocator.alloc(usize, 1);
     obj3[0] = 666;
 
-    la.describe();
+    // la.describe();
 
     allocator.free(obj2);
 
-    la.describe();
+    // la.describe();
 
     allocator.free(obj3);
 
-    la.describe();
+    // la.describe();
 
     allocator.free(obj1);
 
-    la.describe();
+    // la.describe();
+    assert(la.isEmpty());
 }
