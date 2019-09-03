@@ -86,6 +86,20 @@ fn MaxHeap(comptime T: type) type {
             return value;
         }
 
+        fn largerChild(self: *Self, index: usize, notifier: var) ?usize {
+            var left_index = 2 * index + 1;
+            var right_index = left_index + 1;
+
+            var bigger: ?usize = null;
+            if (left_index < self.size) {
+                bigger = left_index;
+            }
+            if (right_index < self.size and notifier.smaller(self.items[left_index], self.items[right_index])) {
+                bigger = right_index;
+            }
+            return bigger;
+        }
+
         /// The indicated index hold a value 'smaller' than its children.
         fn bubbleDown(self: *Self, first_index: usize, notifier: var) void {
             var index = first_index;
@@ -258,7 +272,7 @@ test "MaxHeap" {
 
 pub const LinkAllocator = struct {
     const min_align: usize = 8; // TODO(#3154) @alignOf(usize);
-    const min_words_for_open_block: usize = 3;
+    const min_words_for_open_block: usize = 8;
 
     /// The allocator interface.
     allocator: Allocator,
@@ -362,6 +376,54 @@ pub const LinkAllocator = struct {
         return self;
     }
 
+    const Usable = struct {
+        // The portion of the block usable for writing the location of the
+        // block, then the data itself.
+        // Index [@sizeOf(usize)] is aligned to the new_size.
+        usable_bytes: []u8,
+        open_block: Block,
+    };
+
+    fn getUsableAmount(self: *LinkAllocator, block_index: usize, new_size: usize, new_align: usize) ?Usable {
+        const open_block = self.readBlock(block_index);
+        var internal = self.getBytes(open_block);
+        const internal_start = @ptrToInt(internal.ptr);
+        assert(internal_start % min_align == 0);
+        const data_start = std.mem.alignForward(internal_start + @sizeOf(usize), new_align);
+        const metadata_size = data_start - internal_start;
+        if (internal.len < new_size + metadata_size) {
+            return null;
+        }
+        return Usable{
+            .open_block = open_block,
+            .usable_bytes = internal[metadata_size..],
+        };
+    }
+
+    fn findUsableBlock(self: *LinkAllocator, new_size: usize, new_align: usize) !Usable {
+        errdefer {
+            std.debug.warn("!!! Could not allocate {} bytes with alignment {}\n", new_size, new_align);
+            self.describe();
+        }
+        if (self.open_heap.isEmpty() or self.num_objects == self.max_objects) {
+            return error.OutOfMemory;
+        } else if (self.getUsableAmount(self.open_heap.getMax(), new_size, new_align) == null) {
+            return error.OutOfMemory;
+        }
+        // Start from the largest block, and move to smaller children as
+        // necessary.
+        var index: usize = 0;
+        var result: ?Usable = null;
+        // TODO: We need to choose the bigger of the two children, so that the
+        // entire tree is used.
+        while (index < self.open_heap.size) {
+            result = self.getUsableAmount(self.open_heap.items[index], new_size, new_align) orelse break;
+            index = self.open_heap.largerChild(index, self) orelse break;
+        }
+
+        return result orelse error.OutOfMemory;
+    }
+
     fn realloc(allocator: *Allocator, old_mem: []u8, old_align: u29, new_size: usize, req_new_align: u29) ![]u8 {
         var new_align = if (req_new_align < min_align) min_align else req_new_align;
         const self = @fieldParentPtr(LinkAllocator, "allocator", allocator);
@@ -372,44 +434,31 @@ pub const LinkAllocator = struct {
         }
 
         assert(self.num_objects <= self.max_objects);
-        if (self.open_heap.isEmpty() or self.num_objects == self.max_objects) {
-            return error.OutOfMemory;
-        }
 
-        const open_block = self.readBlock(self.open_heap.getMax());
-        var internal = self.getBytes(open_block);
-        const internal_start = @ptrToInt(internal.ptr);
-        assert(internal_start % min_align == 0);
-        const data_start = std.mem.alignForward(internal_start + @sizeOf(usize), new_align);
-        const metadata_size = data_start - internal_start;
-        if (internal.len - metadata_size < new_size) {
-            // Strictly, the largest isn't necessarily the most aligned, so
-            // another block could succeed.
-            // However, this allocator is meant to not have to search for open
-            // space.
-            return error.OutOfMemory;
-        }
-        _ = self.open_heap.popMax(self);
-        var usable = internal[metadata_size..];
-        const data_word_start = self.sliceInitialWord(usable);
-        var data = usable[0..new_size];
-        const post = usable[std.mem.alignForward(new_size, min_align)..];
+        // Find an open block with enough space for this allocation
+        const usable = try self.findUsableBlock(new_size, new_align);
+        _ = self.open_heap.removeIndex(usable.open_block.open_heap_location.?, self);
+
+        // Fit the data into the open block
+        const data_word_start = self.sliceInitialWord(usable.usable_bytes);
+        var data = usable.usable_bytes[0..new_size];
+        const post = usable.usable_bytes[std.mem.alignForward(new_size, min_align)..];
         const post_word_start = 1 + self.sliceInitialWord(post);
-        const post_word_count = open_block.end_word - post_word_start;
+        const post_word_count = usable.open_block.end_word - post_word_start;
         if (min_words_for_open_block <= post_word_count) {
-            // Shrink this block.
-            self.data_as_words[open_block.first_word] = post_word_start;
-            self.data_as_words[post_word_start - 1] = open_block.first_word;
+            // Split this block to make the remainder usable.
+            self.data_as_words[usable.open_block.first_word] = post_word_start;
+            self.data_as_words[post_word_start - 1] = usable.open_block.first_word;
 
-            self.data_as_words[post_word_start] = open_block.end_word;
-            self.data_as_words[open_block.end_word - 1] = post_word_start;
+            self.data_as_words[post_word_start] = usable.open_block.end_word;
+            self.data_as_words[usable.open_block.end_word - 1] = post_word_start;
             self.open_heap.push(post_word_start, self);
         }
 
         // TODO: For allocations with large alignments, a lot of space could be
         // wasted before the data.
-        self.data_as_words[data_word_start - 1] = open_block.first_word;
-        self.updateOpenBlockLocation(open_block.first_word, null);
+        self.data_as_words[data_word_start - 1] = usable.open_block.first_word;
+        self.updateOpenBlockLocation(usable.open_block.first_word, null);
 
         self.num_objects += 1;
         if (old_mem.len != 0) {
@@ -487,9 +536,9 @@ pub const LinkAllocator = struct {
         while (index < self.data_as_words.len) {
             const block = self.readBlock(index);
             if (block.open_heap_location) |location| {
-                std.debug.warn("\tOPEN block {}: ends at {}\n", block.first_word, block.end_word);
+                std.debug.warn("\tOPEN block {}: ends at {} (size {})\n", block.first_word, block.end_word, block.end_word - block.first_word);
             } else {
-                std.debug.warn("\tFILLED block {}: ends at {}\n", block.first_word, block.end_word);
+                std.debug.warn("\tFILLED block {}: ends at {} (size {})\n", block.first_word, block.end_word, block.end_word - block.first_word);
             }
             std.debug.warn("\t\t[{}] is {}\n", block.end_word - 1, self.data_as_words[block.end_word - 1]);
             if (self.data_as_words[block.end_word - 1] != index) bad = true;
