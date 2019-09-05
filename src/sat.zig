@@ -1,8 +1,143 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const LinkAllocator = @import("linkalloc.zig").LinkAllocator;
+
 pub fn log(comptime fmt: []const u8, args: ...) void {
     //  std.debug.warn(fmt, args);
+}
+
+fn STrie(comptime Value: type) type {
+    return struct {
+        const Self = @This();
+        // TODO(#2746): Remove this wrapper.
+        const Wrap = struct {
+            wrapped: Self,
+        };
+        allocator: *std.mem.Allocator,
+        leafs: [16]?Value,
+        branches: [16]?*Wrap,
+
+        fn init(allocator: *std.mem.Allocator) Self {
+            return Self{
+                .allocator = allocator,
+                .leafs = [_]?Value{null} ** 16,
+                .branches = [_]?*Wrap{null} ** 16,
+            };
+        }
+
+        fn deinit(self: *Self) void {
+            for (self.branches) |b| {
+                if (b) |branch| {
+                    branch.wrapped.deinit();
+                    self.allocator.destroy(branch);
+                }
+            }
+        }
+
+        fn put(self: *Self, key: []const u8, value: Value) error{OutOfMemory}!void {
+            assert(key.len != 0);
+            const i = key[0];
+            const i_lo = i & 0b00001111;
+            const i_hi = (i & 0b11110000) >> 4;
+            if (self.branches[i_hi] == null) {
+                var ptr = try self.allocator.create(Wrap);
+                ptr.wrapped = Self.init(self.allocator);
+                self.branches[i_hi] = ptr;
+            }
+
+            if (key.len == 1) {
+                self.branches[i_hi].?.wrapped.leafs[i_lo] = value;
+            } else {
+                if (self.branches[i_hi].?.wrapped.branches[i_lo] == null) {
+                    var ptr = try self.allocator.create(Wrap);
+                    ptr.wrapped = Self.init(self.allocator);
+                    self.branches[i_hi].?.wrapped.branches[i_lo] = ptr;
+                }
+                try self.branches[i_hi].?.wrapped.branches[i_lo].?.wrapped.put(key[1..], value);
+            }
+        }
+
+        fn get(self: *Self, key: []const u8) ?*Value {
+            assert(key.len != 0);
+            const i = key[0];
+            const i_lo = i & 0b00001111;
+            const i_hi = (i & 0b11110000) >> 4;
+            if (self.branches[i_hi]) |b_hi| {
+                if (key.len == 1) {
+                    if (b_hi.wrapped.leafs[i_lo]) |*leaf| {
+                        return leaf;
+                    }
+                    return null;
+                } else {
+                    if (b_hi.wrapped.branches[i_lo]) |b| {
+                        return b.wrapped.get(key[1..]);
+                    }
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        /// RETURNS whether or not this trie contains a key which is a
+        /// subsequence of the given argument.
+        fn containsSubsequenceKey(self: *Self, key: []const u8) bool {
+            if (key.len == 0) return false;
+            for (key) |c, i| {
+                const c_lo = c & 0b00001111;
+                const c_hi = (c & 0b11110000) >> 4;
+                if (self.branches[c_hi]) |b_hi| {
+                    if (b_hi.wrapped.leafs[c_lo]) |_| return true;
+                    if (b_hi.wrapped.branches[c_lo]) |b_lo| {
+                        if (b_lo.wrapped.containsSubsequenceKey(key[i + 1 ..])) return true;
+                    }
+                }
+            }
+            return false;
+        }
+    };
+}
+
+test "STrie simple" {
+    var buffer: [99000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
+    var trie = STrie(u8).init(allocator);
+    defer trie.deinit();
+    assert(trie.get("hi") == null);
+    try trie.put("hello", 7);
+    assert(trie.get("hello").?.* == 7);
+    assert(trie.get("hellp") == null);
+    assert(trie.get("hellop") == null);
+
+    try trie.put("cat", 1);
+    assert(trie.containsSubsequenceKey("cat"));
+    assert(!trie.containsSubsequenceKey("ct"));
+    assert(!trie.containsSubsequenceKey("ca"));
+    assert(!trie.containsSubsequenceKey("at"));
+    assert(!trie.containsSubsequenceKey("c"));
+    assert(!trie.containsSubsequenceKey("cta"));
+    assert(!trie.containsSubsequenceKey("cc"));
+    assert(!trie.containsSubsequenceKey("ll"));
+    assert(!trie.containsSubsequenceKey("lll"));
+    assert(trie.containsSubsequenceKey("hellocat"));
+    assert(trie.containsSubsequenceKey("ccaatt"));
+    assert(trie.containsSubsequenceKey("zczaztz"));
+    assert(trie.containsSubsequenceKey("hellop"));
+}
+
+fn varintEncode(n: usize, out: *std.ArrayList(u8)) !void {
+    var k = n;
+    while (true) {
+        if (k < 128) {
+            try out.append(@intCast(u8, k));
+            return;
+        } else {
+            try out.append(128 + @intCast(u8, k & 127));
+            k = k / 128;
+        }
+    }
 }
 
 pub const CNF = struct {
@@ -13,10 +148,18 @@ pub const CNF = struct {
         /// Index of clauses satisfied by a `false` assignment.
         clauses_negative: std.ArrayList(usize),
 
-        fn init(allocator: *std.mem.Allocator) TermInfo {
+        preprocessing_negated: bool,
+
+        /// false when this term was added by an external user
+        /// true when this was added internally (e.g., for symmetry breaking)
+        internal_term: bool,
+
+        fn init(allocator: *std.mem.Allocator, internal_term: bool) TermInfo {
             return TermInfo{
                 .clauses_positive = std.ArrayList(usize).init(allocator),
                 .clauses_negative = std.ArrayList(usize).init(allocator),
+                .preprocessing_negated = false,
+                .internal_term = internal_term,
             };
         }
 
@@ -44,6 +187,52 @@ pub const CNF = struct {
         /// decision_level is the number of free decision that have been made.
         /// Initial unit-prop and pure-literals are assigned decision level 0.
         decision_level: usize,
+    };
+
+    const Clause = struct {
+        const Analysis = struct {
+            satisfied: bool,
+            undetermined: [2]?Literal,
+        };
+
+        /// Analyzes this clause in the given assignment.
+        /// Determines if this clause is satisfied, and otherwise produces up to
+        /// to undetermined literals that remain.
+        fn analyze(clause: Clause, assignment: []const ?Assignment) Analysis {
+            var satisfied = false;
+            var undetermined = [_]?Literal{ null, null };
+            for (clause.literals) |literal| {
+                if (assignment[literal.term]) |assigned| {
+                    if (assigned.assignment == literal.sign) {
+                        satisfied = true;
+                    }
+                } else {
+                    if (undetermined[0] == null) {
+                        undetermined[0] = literal;
+                    } else {
+                        undetermined[1] = literal;
+                    }
+                }
+            }
+            return Analysis{ .satisfied = satisfied, .undetermined = undetermined };
+        }
+
+        fn invert(self: *Clause, term: usize) void {
+            for (self.literals) |*literal| {
+                if (literal.term == term) {
+                    literal.sign = !literal.sign;
+                }
+            }
+        }
+
+        const Source = enum {
+            Problem,
+            Conflict,
+            SymmetryBreaking,
+        };
+
+        literals: []Literal,
+        source: Source,
     };
 
     allocator: *std.mem.Allocator,
@@ -74,6 +263,184 @@ pub const CNF = struct {
         self.term_info.deinit();
         self.conflict.deinit();
         self.diagnose_tmp.deinit();
+    }
+
+    fn vendVariable(self: *CNF, internal: bool) !usize {
+        var id = self.term_info.count();
+        try self.term_info.append(TermInfo.init(self.allocator, internal));
+        return id;
+    }
+
+    /// REQUIRES that automorphism actually is an automorphism
+    fn learnAutomorphismClauses(self: *CNF, automorphism: []const usize) !void {
+        // See "Symmetry-breaking predicates for search problems." (Crawford, Ginsberg, Luks, Roy, 1996)
+        var same_variables = std.ArrayList(usize).init(self.allocator);
+        defer same_variables.deinit();
+
+        for (automorphism) |_, i| {
+            if (automorphism[i] != i) {
+                var clause = self.allocator.alloc(Literal, same_variables.count() + 2);
+                self.internalAddClause(clause) catch |e| {
+                    self.allocator.free(clause);
+                    return e;
+                };
+
+                // (all same) -> (v[i] < v[a[i]])
+                for (same_variables.toSlice()) |v, k| {
+                    clause[k] = Literal{ .term = v, .sign = false };
+                }
+                clause[clause.len - 2] = Literal{ .term = i, .sign = true };
+                clause[clause.len - 1] = Literal{ .term = automorphism[i], .sign = false };
+
+                // (a and b) -> s // ~a or ~b or s
+                // (~a and ~b) -> s // a or b or s
+                // (s and a) -> b // ~s or ~a or b
+                // (s and ~a) -> ~b // ~s or a or ~b
+                var s = try .self.vendVariable(true);
+                try same_variables.append(v);
+
+                var c1 = try self.allocator.alloc(Literal, 3);
+                var c1_saved = false;
+                errdefer if (!c1_saved) self.allocator.free(c1);
+                var c2 = try self.allocator.alloc(Literal, 3);
+                var c2_saved = false;
+                errdefer if (!c2_saved) self.allocator.free(c2);
+                var c3 = try self.allocator.alloc(Literal, 3);
+                var c3_saved = false;
+                errdefer if (!c3_saved) self.allocator.free(c3);
+                var c4 = try self.allocator.alloc(Literal, 3);
+                var c4_saved = false;
+                errdefer if (!c4_saved) self.allocator.free(c4);
+
+                const a = i;
+                const b = automorphism[i];
+
+                c1[0] = Literal.negative(a);
+                c1[1] = Literal.negative(b);
+                c1[2] = Literal.positive(s);
+
+                c2[0] = Literal.positive(a);
+                c2[1] = Literal.positive(b);
+                c2[2] = Literal.positive(s);
+
+                c3[0] = Literal.negative(a);
+                c3[1] = Literal.positive(b);
+                c3[2] = Literal.negative(s);
+
+                c4[0] = Literal.positive(a);
+                c4[1] = Literal.positive(b);
+                c4[2] = Literal.negative(s);
+
+                try self.internalAddClause(c1, Clause.Source.SymmetryBreaking);
+                c1_saved = true;
+                try self.internalAddClause(c2, Clause.Source.SymmetryBreaking);
+                c2_saved = true;
+                try self.internalAddClause(c3, Clause.Source.SymmetryBreaking);
+                c3_saved = true;
+                try self.internalAddClause(c4, Clause.Source.SymmetryBreaking);
+                c4_saved = true;
+            }
+        }
+    }
+
+    /// RETURNS whether or not the given mapping is an automorphism (self-isomorphism).
+    fn checkProposedAutomorphism(self: *const CNF, automorphism: []const usize) !bool {
+        assert(automorphism.len == self.term_info.count());
+
+        var clauses_by_length = std.ArrayList(std.ArrayList(usize)).init(self.allocator);
+        defer {
+            for (clauses_by_length.toSlice()) |arr| {
+                arr.deinit();
+            }
+            clauses_by_length.deinit();
+        }
+
+        // Collect a set of clauses in the original CNF.
+        var key_list = std.ArrayList(u8).init(self.allocator);
+        defer key_list.deinit();
+        var clause_trie = STrie(bool).init(self.allocator);
+        defer clause_trie.deinit();
+        for (self.clauses.toSlice()) |clause| {
+            key_list.shrink(0);
+            std.sort.sort(Literal, clause.literals, Literal.lessThan);
+            for (clause.literals) |literal| {
+                try varintEncode(literal.term * 2 + @boolToInt(literal.sign), &key_list);
+            }
+            try clause_trie.put(key_list.toSlice(), true);
+        }
+
+        // Check if the mappings are in the set.
+        var rearr = std.ArrayList(Literal).init(self.allocator);
+        defer rearr.deinit();
+        for (self.clauses.toSlice()) |clause| {
+            rearr.shrink(0);
+            try rearr.appendSlice(clause.literals);
+            for (rearr.toSlice()) |*literal| {
+                literal.term = automorphism[literal.term];
+            }
+            std.sort.sort(Literal, rearr.toSlice(), Literal.lessThan);
+            key_list.shrink(0);
+            for (rearr.toSlice()) |literal| {
+                try varintEncode(literal.term * 2 + @boolToInt(literal.sign), &key_list);
+            }
+
+            if (!clause_trie.containsSubsequenceKey(key_list.toSlice())) {
+                // This clause is not preserved by the mapping.
+                return false;
+            }
+        }
+
+        // Every clause is preseved by the autmorphism.
+        // TODO: Assumes that automorphism is a permutation (no dupliate elements)
+        return true;
+    }
+
+    fn preprocessClauses(self: *CNF) !void {
+        if (self.term_info.count() < 1 << 24) {
+            // It's better to not attempt to preprocess small CNFs.
+            return;
+        }
+
+        // 1) Attempt to normalize the sign of all terms.
+        // Every term should appear more often negatively than positively.
+        // TODO: Break ties.
+        const Counts = struct {
+            positive: usize,
+            negative: usize,
+        };
+
+        _ = try self.allocator.alloc(u8, 1);
+        // var terms_by_count = PTrie(std.ArrayList(usize)).init(self.allocator);
+        for (self.term_info.toSlice()) |*info, term| {
+            if (info.clauses_positive.count() > info.clauses_negative.count()) {
+                // Swap.
+                info.preprocessing_negated = !info.preprocessing_negated;
+                var was_positive = info.clauses_positive;
+                info.clauses_positive = info.clauses_negative;
+                info.clauses_negative = was_positive;
+                var clauses = self.clauses.toSlice();
+                for (info.clauses_positive.toSlice()) |ci| {
+                    clauses[ci].invert(term);
+                }
+                for (info.clauses_negative.toSlice()) |ci| {
+                    clauses[ci].invert(term);
+                }
+            }
+
+            // var count = IPair{
+            //     .left = info.clauses_positive.count(),
+            //     .right = info.clauses_negative.count(),
+            // };
+            // if (terms_by_count.get(count) == null) {
+            //     try terms_by_count.put(count, std.ArrayList(usize).init(self.allocator));
+            // }
+            // try terms_by_count.get(count).?.append(term);
+        }
+
+        // TODO: Find redundant (subsumed) clauses and remove them.
+        // TODO: Simplify using unit clauses.
+
+        // Find interchangeable pairs of variables.
     }
 
     fn diagnoseConflict(self: *CNF, assignment: []const ?Assignment, conflicting: Assignment) !void {
@@ -136,6 +503,8 @@ pub const CNF = struct {
     pub fn satisfiable(self: *CNF) !?[]const bool {
         log("\n====\n");
         defer log("<<<<\n\n");
+
+        try self.preprocessClauses();
 
         var assignment = try self.allocator.alloc(?Assignment, self.term_info.count());
         defer self.allocator.free(assignment);
@@ -329,7 +698,7 @@ pub const CNF = struct {
                         }
 
                         // Add the clause, then reset the decision level, assignment stack, and unit clause set.
-                        try self.internalAddClause(conflict_clause);
+                        try self.internalAddClause(conflict_clause, Clause.Source.Conflict);
                         decision_level = bad_decision - 1;
 
                         // Reset unit clauses to only possibly this one.
@@ -373,43 +742,12 @@ pub const CNF = struct {
         // All terms are assigned.
         var out = try self.allocator.alloc(bool, assignment.len);
         for (assignment) |a, i| {
-            out[i] = a.?.assignment;
+            out[i] = a.?.assignment != self.term_info.at(i).preprocessing_negated;
         }
         return out;
     }
 
-    pub const Clause = struct {
-        const Analysis = struct {
-            satisfied: bool,
-            undetermined: [2]?Literal,
-        };
-
-        /// Analyzes this clause in the given assignment.
-        /// Determines if this clause is satisfied, and otherwise produces up to
-        /// to undetermined literals that remain.
-        fn analyze(clause: Clause, assignment: []const ?Assignment) Analysis {
-            var satisfied = false;
-            var undetermined = [_]?Literal{ null, null };
-            for (clause.literals) |literal| {
-                if (assignment[literal.term]) |assigned| {
-                    if (assigned.assignment == literal.sign) {
-                        satisfied = true;
-                    }
-                } else {
-                    if (undetermined[0] == null) {
-                        undetermined[0] = literal;
-                    } else {
-                        undetermined[1] = literal;
-                    }
-                }
-            }
-            return Analysis{ .satisfied = satisfied, .undetermined = undetermined };
-        }
-
-        literals: []const Literal,
-    };
-
-    fn internalAddClause(self: *CNF, literals: []const Literal) !void {
+    fn internalAddClause(self: *CNF, literals: []Literal, source: Clause.Source) !void {
         const clause_index = self.clauses.count();
         for (literals) |literal| {
             var term_info = &self.term_info.toSlice()[literal.term];
@@ -421,10 +759,9 @@ pub const CNF = struct {
         }
 
         try self.clauses.append(Clause{
-            // TODO: Should we copy so that ownership is clearer?
+            .source = source,
             .literals = literals,
         });
-        // std.debug.warn("% Number of clauses: {}\n", self.clauses.count());
     }
 
     /// Adds a clause to this CNF clause database.
@@ -435,16 +772,17 @@ pub const CNF = struct {
         // Grow the set of terms as needed.
         for (literals) |literal| {
             while (literal.term >= self.term_info.count()) {
-                var term_info = TermInfo.init(self.allocator);
+                var term_info = TermInfo.init(self.allocator, false);
                 try self.term_info.append(term_info);
             }
+            assert(!self.term_info.at(literal.term).internal_term);
         }
 
         // TODO: Check for duplicates, and tautological clauses
         var copy = try self.allocator.alloc(Literal, literals.len);
         std.mem.copy(Literal, copy, literals);
 
-        try self.internalAddClause(copy);
+        try self.internalAddClause(copy, Clause.Source.Problem);
     }
 };
 
@@ -455,11 +793,28 @@ pub const Literal = struct {
     // "~x_9" is (9, false).
     term: usize,
     sign: bool,
+
+    fn positive(term: usize) Literal {
+        return Literal{ .term = term, .sign = true };
+    }
+
+    fn negative(term: usize) Literal {
+        return Literal{ .term = term, .sign = false };
+    }
+
+    fn lessThan(a: Literal, b: Literal) bool {
+        if (a.term != b.term) {
+            return a.term < b.term;
+        }
+        return !a.sign and b.sign;
+    }
 };
 
 test "sat (x)" {
-    var buffer: [10000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [1000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     try cnf.addClause([_]Literal{Literal{ .term = 0, .sign = true }});
@@ -467,11 +822,14 @@ test "sat (x)" {
     const sat = (try cnf.satisfiable()).?;
     assert(sat.len == 1);
     assert(sat[0] == true);
+    allocator.free(sat);
 }
 
 test "unsat (x) and (~x)" {
-    var buffer: [10000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [1000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     try cnf.addClause([_]Literal{Literal{ .term = 0, .sign = true }});
@@ -482,8 +840,10 @@ test "unsat (x) and (~x)" {
 }
 
 test "sat (~x or y) and (x or ~y)" {
-    var buffer: [10000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [1000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     try cnf.addClause([_]Literal{ Literal{ .term = 1, .sign = false }, Literal{ .term = 0, .sign = true } });
@@ -493,11 +853,14 @@ test "sat (~x or y) and (x or ~y)" {
     assert(sat != null);
     assert(sat.?.len == 2);
     assert(sat.?[0] == sat.?[1]);
+    allocator.free(sat.?);
 }
 
 test "sat (x or y) and (~x or ~y)" {
-    var buffer: [10000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [1000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     try cnf.addClause([_]Literal{ Literal{ .term = 1, .sign = true }, Literal{ .term = 0, .sign = true } });
@@ -507,6 +870,7 @@ test "sat (x or y) and (~x or ~y)" {
     assert(sat != null);
     assert(sat.?.len == 2);
     assert(sat.?[0] != sat.?[1]);
+    allocator.free(sat.?);
 }
 
 const Testing = struct {
@@ -556,8 +920,11 @@ const Testing = struct {
             while (pr_a.next()) |p_a| {
                 var pr_b = Range{ .from = 0, .limit = p_a };
                 while (pr_b.next()) |p_b| {
-                    literals[0] = Literal{ .term = pigeons * hole + p_a, .sign = false };
-                    literals[1] = Literal{ .term = pigeons * hole + p_b, .sign = false };
+                    // TODO(#3095):
+                    const lit0 = Literal{ .term = pigeons * hole + p_a, .sign = false };
+                    literals[0] = lit0;
+                    const lit1 = Literal{ .term = pigeons * hole + p_b, .sign = false };
+                    literals[1] = lit1;
                     cnf.addClause(literals[0..2]) catch unreachable;
                 }
             }
@@ -566,8 +933,10 @@ const Testing = struct {
 };
 
 test "example" {
-    var buffer: [100000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [10000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     try cnf.addClause([_]Literal{Literal{ .term = 1, .sign = true }});
@@ -646,11 +1015,14 @@ test "example" {
         false,
         true,
     }));
+    allocator.free(a.?);
 }
 
 test "pigeon unsat (3 pigeons, 2 holes)" {
-    var buffer: [10000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [1000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     try cnf.addClause([_]Literal{Literal{ .term = 0, .sign = true }});
@@ -672,8 +1044,10 @@ test "pigeon unsat (3 pigeons, 2 holes)" {
 }
 
 test "pigeon unsat (4 pigeons, 3 holes)" {
-    var buffer: [10000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [1000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     Testing.pigeon(&cnf, 4, 3);
@@ -681,19 +1055,68 @@ test "pigeon unsat (4 pigeons, 3 holes)" {
     assert(a == null);
 }
 
+test "pigeon automorphism (4 pigeons, 3 holes)" {
+    var buffer: [1000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
+    var cnf = CNF.init(allocator);
+    defer cnf.deinit();
+    Testing.pigeon(&cnf, 4, 3);
+
+    var mapping = [_]usize{
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+    };
+    assert(try cnf.checkProposedAutomorphism(mapping[0..]));
+
+    mapping[0] = 1;
+    mapping[1] = 0;
+    assert(!try cnf.checkProposedAutomorphism(mapping[0..]));
+    mapping[0] = 0;
+    mapping[1] = 1;
+
+    // Swap (0, 4, 8) with (3, 7, 11)
+    mapping[0] = 3;
+    mapping[4] = 7;
+    mapping[8] = 11;
+    mapping[3] = 0;
+    mapping[7] = 4;
+    mapping[11] = 8;
+    assert(try cnf.checkProposedAutomorphism(mapping[0..]));
+    mapping[1] = 2;
+    mapping[2] = 1;
+    assert(!try cnf.checkProposedAutomorphism(mapping[0..]));
+}
+
 test "pigeon unsat (5 pigeons, 5 holes)" {
-    var buffer: [100000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [10000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     Testing.pigeon(&cnf, 5, 5);
     var a = try cnf.satisfiable();
     assert(a != null);
+    allocator.free(a.?);
 }
 
 test "pigeon unsat (5 pigeons, 4 holes)" {
-    var buffer: [100000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [10000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     Testing.pigeon(&cnf, 5, 4);
@@ -702,8 +1125,10 @@ test "pigeon unsat (5 pigeons, 4 holes)" {
 }
 
 test "pigeon unsat (6 pigeons, 5 holes)" {
-    var buffer: [1000000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    var buffer: [10000000]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     Testing.pigeon(&cnf, 6, 5);
@@ -712,8 +1137,12 @@ test "pigeon unsat (6 pigeons, 5 holes)" {
 }
 
 test "pigeon unsat (7 pigeons, 6 holes)" {
-    var buffer: [10000000]u8 = undefined;
-    var allocator = &std.heap.FixedBufferAllocator.init(&buffer).allocator;
+    // The FixedBufferAllocator requires about 7.7MB.
+    // The LinkAllocator requires about 1.5MB.
+    var buffer: [1509600]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
     var cnf = CNF.init(allocator);
     defer cnf.deinit();
     Testing.pigeon(&cnf, 7, 6);
