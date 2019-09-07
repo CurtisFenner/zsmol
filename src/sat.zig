@@ -4,7 +4,7 @@ const assert = std.debug.assert;
 const LinkAllocator = @import("linkalloc.zig").LinkAllocator;
 
 pub fn log(comptime fmt: []const u8, args: ...) void {
-    //  std.debug.warn(fmt, args);
+    //std.debug.warn(fmt, args);
 }
 
 fn STrie(comptime Value: type) type {
@@ -235,7 +235,8 @@ pub const CNF = struct {
         source: Source,
     };
 
-    allocator: *std.mem.Allocator,
+    general_allocator: *std.mem.Allocator,
+    clause_allocator: std.heap.ArenaAllocator,
     clauses: std.ArrayList(Clause),
     term_info: std.ArrayList(TermInfo),
     conflict: std.ArrayList(usize),
@@ -244,7 +245,8 @@ pub const CNF = struct {
     /// Creates an empty clause database (with no terms and no clauses).
     pub fn init(allocator: *std.mem.Allocator) CNF {
         return CNF{
-            .allocator = allocator,
+            .general_allocator = allocator,
+            .clause_allocator = std.heap.ArenaAllocator.init(allocator),
             .clauses = std.ArrayList(Clause).init(allocator),
             .term_info = std.ArrayList(TermInfo).init(allocator),
             .conflict = std.ArrayList(usize).init(allocator),
@@ -253,9 +255,7 @@ pub const CNF = struct {
     }
 
     pub fn deinit(self: *CNF) void {
-        for (self.clauses.toSlice()) |clause| {
-            self.allocator.free(clause.literals);
-        }
+        self.clause_allocator.deinit();
         self.clauses.deinit();
         for (self.term_info.toSlice()) |info| {
             info.deinit();
@@ -299,18 +299,18 @@ pub const CNF = struct {
                 var s = try .self.vendVariable(true);
                 try same_variables.append(v);
 
-                var c1 = try self.allocator.alloc(Literal, 3);
+                var c1 = try self.clause_allocator.allocator.alloc(Literal, 3);
                 var c1_saved = false;
-                errdefer if (!c1_saved) self.allocator.free(c1);
-                var c2 = try self.allocator.alloc(Literal, 3);
+                errdefer if (!c1_saved) self.clause_allocator.allocator.free(c1);
+                var c2 = try self.clause_allocator.allocator.alloc(Literal, 3);
                 var c2_saved = false;
-                errdefer if (!c2_saved) self.allocator.free(c2);
-                var c3 = try self.allocator.alloc(Literal, 3);
+                errdefer if (!c2_saved) self.clause_allocator.allocator.free(c2);
+                var c3 = try self.clause_allocator.allocator.alloc(Literal, 3);
                 var c3_saved = false;
-                errdefer if (!c3_saved) self.allocator.free(c3);
-                var c4 = try self.allocator.alloc(Literal, 3);
+                errdefer if (!c3_saved) self.clause_allocator.allocator.free(c3);
+                var c4 = try self.clause_allocator.allocator.alloc(Literal, 3);
                 var c4_saved = false;
-                errdefer if (!c4_saved) self.allocator.free(c4);
+                errdefer if (!c4_saved) self.clause_allocator.allocator.free(c4);
 
                 const a = i;
                 const b = automorphism[i];
@@ -347,7 +347,7 @@ pub const CNF = struct {
     fn checkProposedAutomorphism(self: *const CNF, automorphism: []const usize) !bool {
         assert(automorphism.len == self.term_info.count());
 
-        var clauses_by_length = std.ArrayList(std.ArrayList(usize)).init(self.allocator);
+        var clauses_by_length = std.ArrayList(std.ArrayList(usize)).init(self.general_allocator);
         defer {
             for (clauses_by_length.toSlice()) |arr| {
                 arr.deinit();
@@ -356,9 +356,9 @@ pub const CNF = struct {
         }
 
         // Collect a set of clauses in the original CNF.
-        var key_list = std.ArrayList(u8).init(self.allocator);
+        var key_list = std.ArrayList(u8).init(self.general_allocator);
         defer key_list.deinit();
-        var clause_trie = STrie(bool).init(self.allocator);
+        var clause_trie = STrie(bool).init(self.general_allocator);
         defer clause_trie.deinit();
         for (self.clauses.toSlice()) |clause| {
             key_list.shrink(0);
@@ -370,7 +370,7 @@ pub const CNF = struct {
         }
 
         // Check if the mappings are in the set.
-        var rearr = std.ArrayList(Literal).init(self.allocator);
+        var rearr = std.ArrayList(Literal).init(self.general_allocator);
         defer rearr.deinit();
         for (self.clauses.toSlice()) |clause| {
             rearr.shrink(0);
@@ -395,7 +395,7 @@ pub const CNF = struct {
         return true;
     }
 
-    fn preprocessClauses(self: *CNF) !void {
+    fn preprocessClauses(self: *CNF) error{}!void {
         if (self.term_info.count() < 1 << 24) {
             // It's better to not attempt to preprocess small CNFs.
             return;
@@ -409,11 +409,11 @@ pub const CNF = struct {
             negative: usize,
         };
 
-        _ = try self.allocator.alloc(u8, 1);
         // var terms_by_count = PTrie(std.ArrayList(usize)).init(self.allocator);
         for (self.term_info.toSlice()) |*info, term| {
             if (info.clauses_positive.count() > info.clauses_negative.count()) {
                 // Swap.
+                log("Swapping term x{}, {}", term, info);
                 info.preprocessing_negated = !info.preprocessing_negated;
                 var was_positive = info.clauses_positive;
                 info.clauses_positive = info.clauses_negative;
@@ -461,8 +461,8 @@ pub const CNF = struct {
         // just use all of the roots.
 
         // TODO: Reuse this memory.
-        var seen = try self.allocator.alloc(bool, assignment.len);
-        defer self.allocator.free(seen);
+        var seen = try self.general_allocator.alloc(bool, assignment.len);
+        defer self.general_allocator.free(seen);
         for (seen) |*v| {
             v.* = false;
         }
@@ -501,26 +501,28 @@ pub const CNF = struct {
     /// RETURNS a boolean satisfiaction when this CNF is satisfiable.
     /// The returned slice must be freed by the caller.
     pub fn satisfiable(self: *CNF) !?[]const bool {
-        log("\n====\n");
-        defer log("<<<<\n\n");
+        defer log("@ <<<<\n\n");
+        log("@ =" ** 80 ++ "\n");
+        log("@ # clauses at beginning: {}\n", self.clauses.count());
+        defer log("@ # clauses at end: {}\n", self.clauses.count());
 
         try self.preprocessClauses();
 
-        var assignment = try self.allocator.alloc(?Assignment, self.term_info.count());
-        defer self.allocator.free(assignment);
+        var assignment = try self.general_allocator.alloc(?Assignment, self.term_info.count());
+        defer self.general_allocator.free(assignment);
         for (assignment) |_, i| {
             assignment[i] = null;
         }
 
         // Preprocess the input:
         // Find unit clauses and pure literals.
-        var unit_literals = std.ArrayList(Assignment).init(self.allocator);
+        var unit_literals = std.ArrayList(Assignment).init(self.general_allocator);
         defer unit_literals.deinit();
         const SignCounts = struct {
             positive: usize,
             negative: usize,
         };
-        var sign_counts_list = std.ArrayList(SignCounts).init(self.allocator);
+        var sign_counts_list = std.ArrayList(SignCounts).init(self.general_allocator);
         defer sign_counts_list.deinit();
         while (true) {
             // Reset the statistics.
@@ -627,6 +629,7 @@ pub const CNF = struct {
             if (unit_literals.count() != 0) {
                 // There is a forced assignment from a previous assignment.
                 branch = unit_literals.pop();
+                log("@ Unit: {}\n", branch);
             } else {
                 // All are assigned.
                 if (assigned_through == self.term_info.len) break;
@@ -646,8 +649,8 @@ pub const CNF = struct {
                     .term = assigned_through,
                     .decision_level = decision_level,
                 };
+                log("@ Choice: {} (through {})\n", branch, assigned_through);
             }
-            log("@ Choice: {} (through {})\n", branch, assigned_through);
 
             if (assignment[branch.term]) |previous| {
                 assert(previous.assignment == branch.assignment);
@@ -675,8 +678,8 @@ pub const CNF = struct {
                         });
 
                         // Add the conflict clause:
-                        var conflict_clause = try self.allocator.alloc(Literal, self.conflict.count());
-                        errdefer self.allocator.free(conflict_clause);
+                        var conflict_clause = try self.clause_allocator.allocator.alloc(Literal, self.conflict.count());
+                        errdefer self.clause_allocator.allocator.free(conflict_clause); // TODO: This does nothing
                         var bad_decision: usize = decision_level;
                         for (self.conflict.toSlice()) |term, i| {
                             const assigned = assignment[term].?;
@@ -692,7 +695,7 @@ pub const CNF = struct {
                         log("@ Bad decision level was {}\n", bad_decision);
                         if (bad_decision == 0 or self.conflict.count() == 0) {
                             log("@ Unsatisfiable.");
-                            self.allocator.free(conflict_clause);
+                            self.clause_allocator.allocator.free(conflict_clause); // TODO: This does nothing
                             // A contradiction has been reached.
                             return null;
                         }
@@ -740,7 +743,7 @@ pub const CNF = struct {
         }
 
         // All terms are assigned.
-        var out = try self.allocator.alloc(bool, assignment.len);
+        var out = try self.general_allocator.alloc(bool, assignment.len);
         for (assignment) |a, i| {
             out[i] = a.?.assignment != self.term_info.at(i).preprocessing_negated;
         }
@@ -772,14 +775,15 @@ pub const CNF = struct {
         // Grow the set of terms as needed.
         for (literals) |literal| {
             while (literal.term >= self.term_info.count()) {
-                var term_info = TermInfo.init(self.allocator, false);
+                var term_info = TermInfo.init(self.general_allocator, false);
                 try self.term_info.append(term_info);
             }
             assert(!self.term_info.at(literal.term).internal_term);
         }
 
         // TODO: Check for duplicates, and tautological clauses
-        var copy = try self.allocator.alloc(Literal, literals.len);
+        var copy = try self.clause_allocator.allocator.alloc(Literal, literals.len);
+        errdefer self.clause_allocator.allocator.free(copy); // TODO: This does nothing
         std.mem.copy(Literal, copy, literals);
 
         try self.internalAddClause(copy, Clause.Source.Problem);
@@ -1139,7 +1143,7 @@ test "pigeon unsat (6 pigeons, 5 holes)" {
 test "pigeon unsat (7 pigeons, 6 holes)" {
     // The FixedBufferAllocator requires about 7.7MB.
     // The LinkAllocator requires about 1.5MB.
-    var buffer: [1509600]u8 = undefined;
+    var buffer: [1309600]u8 = undefined;
     var linked = LinkAllocator.init(buffer[0..]);
     defer assert(linked.isEmpty());
     var allocator = &linked.allocator;
@@ -1218,6 +1222,18 @@ test "unsat example" {
     try cnf.addClause(Testing.clause([_]isize{ -5, -7, -4 }));
     try cnf.addClause(Testing.clause([_]isize{ 7, -6, -2 }));
 
+    var a = try cnf.satisfiable();
+    assert(a == null);
+}
+
+pub fn main() !void {
+    var buffer: [1309600]u8 = undefined;
+    var linked = LinkAllocator.init(buffer[0..]);
+    defer assert(linked.isEmpty());
+    var allocator = &linked.allocator;
+    var cnf = CNF.init(allocator);
+    defer cnf.deinit();
+    Testing.pigeon(&cnf, 7, 6);
     var a = try cnf.satisfiable();
     assert(a == null);
 }
