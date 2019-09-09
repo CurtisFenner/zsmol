@@ -5,6 +5,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
+const TypeInfo = @import("builtin").TypeInfo;
+const TypeId = @import("builtin").TypeId;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -458,6 +460,9 @@ pub fn Combinators(comptime Token: type) type {
                 pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
                     const fields = std.meta.fields(Into);
                     inline for (fields) |field| {
+                        if (comptime std.meta.activeTag(@typeInfo(field.field_type)) != TypeId.Pointer or !@typeInfo(field.field_type).Pointer.is_const) {
+                            @compileError("ChoiceParser requires field `" ++ field.name ++ "` in `" ++ @typeName(Into) ++ "` to be a const pointer");
+                        }
                         const FieldType = @typeInfo(field.field_type).Pointer.child;
                         const result = try @noInlineCall(FieldType.Parser._parse, allocator, stream, from);
                         // TODO(#27272): Use a switch.
@@ -486,6 +491,10 @@ pub fn Combinators(comptime Token: type) type {
         }
 
         pub fn SequenceParser(comptime Into: type, comptime fields: []const Field) type {
+            if (fields.len == 0) {
+                @compileError("SequenceParser requires at least one field");
+            }
+
             return struct {
                 pub fn parse(allocator: *std.mem.Allocator, stream: Stream, parse_error: *ParseErrorMessage) error{
                     OutOfMemory,

@@ -597,12 +597,11 @@ pub const ImportChoice = union(enum) {
     of_package: *const ImportOfPackage,
 
     pub const Parser = comb.ChoiceParser(@This());
-    location: Location,
 };
 
 pub const ImportOfObject = struct {
     package_name: Leaf("Iden"),
-    object_Name: Leaf("TypeIden"),
+    object_name: Leaf("TypeIden"),
 
     pub const Parser = comb.fluent //
         .req("package_name", Leaf("Iden")) //
@@ -626,7 +625,6 @@ pub const Definition = union(enum) {
     interface_definition: *const InterfaceDefinition,
 
     pub const Parser = comb.ChoiceParser(@This());
-    location: Location,
 };
 
 pub const ClassDefinition = struct {
@@ -638,10 +636,10 @@ pub const ClassDefinition = struct {
 
     pub const Parser = comb.fluent //
         .req("_", Leaf("KeyClass")) //
-        .req("class-name", Leaf("TypeIden")).cut("Expected a class name after `class`") //
+        .req("class_name", Leaf("TypeIden")).cut("Expected a class name after `class`") //
         .opt("generics", Generics) //
         .opt("implements", Implements) //
-        .req("_", Leaf("PuncOpenCurly")).cut("Expected a `{` to begin a class's body") //
+        .req("_", Leaf("PuncCurlyOpen")).cut("Expected a `{` to begin a class's body") //
         .star("fields", Field) //
         .star("members", FunctionDef) //
         .req("_", Leaf("PuncCurlyClose")).cut("Expected another class member or a `}` to close a class's body") //
@@ -653,6 +651,9 @@ pub const ClassDefinition = struct {
 pub const UnionDefinition = struct {
     union_name: Leaf("TypeIden"),
     generics: ?*const Generics,
+    implements: ?*const Implements,
+    fields: []const Field,
+    members: []const FunctionDef,
 
     pub const Parser = comb.fluent //
         .req("_", Leaf("KeyUnion")) //
@@ -664,27 +665,35 @@ pub const UnionDefinition = struct {
         .star("members", FunctionDef) //
         .req("_", Leaf("PuncCurlyClose")).cut("Expected another union member or a `}` to close a union's body") //
         .seq(@This());
+    location: Location,
 };
 
 pub const Implements = struct {
+    constraints: []const Type,
+
     pub const Parser = comb.fluent //
         .req("_", Leaf("KeyIs")) //
         .plusSep("constraints", Type, Leaf("PuncComma")).cut("Expected one or more type constraints after `is`") //
         .seq(@This());
+    location: Location,
 };
 
 pub const Field = struct {
+    field: Variable,
+
     pub const Parser = comb.fluent //
         .req("_", Leaf("KeyVar")) //
         .req("field", Variable) //
         .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` after a field") //
         .seq(@This());
+    location: Location,
 };
 
 pub const InterfaceDefinition = struct {
     i_name: Leaf("TypeIden"),
     generics: ?*const Generics,
     members: []const InterfaceMember,
+
     pub const Parser = comb.fluent //
         .req("_", Leaf("KeyInterface")) //
         .req("i_name", Leaf("TypeIden")).cut("Expected an interface name after `interface`") //
@@ -697,31 +706,49 @@ pub const InterfaceDefinition = struct {
 };
 
 pub const InterfaceMember = struct {
+    signature: Signature,
+
     pub const Parser = comb.fluent //
         .req("signature", Signature) //
         .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` after the interface member's signature") //
         .seq(@This());
+    location: Location,
 };
 
 pub const Generics = struct {
+    parameters: []const Leaf("TypeVar"),
+    constraints: ?*const TypeConstraints,
+
     pub const Parser = comb.fluent //
         .req("_", Leaf("PuncSquareOpen")) //
         .plusSep("parameters", Leaf("TypeVar"), Leaf("PuncComma")).cut("Expected one or more type variables after `[`") //
         .opt("constraints", TypeConstraints) //
         .req("_", Leaf("PuncSquareClose")).cut("Expected a `]` to finish a type-variables block") //
         .seq(@This());
+    location: Location,
 };
 
-pub const TypeConstraints = comb.fluent //
-    .req("_", KBar) //
-    .plusSep("constraints", TypeConstraint, KComma).cut("Expected a type-constraint after `|`") //
-    .seq();
+pub const TypeConstraints = struct {
+    constraints: []const TypeConstraint,
 
-pub const TypeConstraint = comb.fluent //
-    .req("var", TTypeVar) //
-    .req("_", KIs).cut("Expected `is` to make a type-constraint") //
-    .req("constraint", Type).cut("Expected a constraining type after `is`") //
-    .seq();
+    pub const Parser = comb.fluent //
+        .req("_", Leaf("PuncBar")) //
+        .plusSep("constraints", TypeConstraint, Leaf("PuncComma")).cut("Expected a type-constraint after `|`") //
+        .seq(@This());
+    location: Location,
+};
+
+pub const TypeConstraint = struct {
+    variable: Leaf("TypeVar"),
+    constraint: Type,
+
+    pub const Parser = comb.fluent //
+        .req("variable", Leaf("TypeVar")) //
+        .req("_", Leaf("KeyIs")).cut("Expected `is` to make a type-constraint") //
+        .req("constraint", Type).cut("Expected a constraining type after `is`") //
+        .seq(@This());
+    location: Location,
+};
 
 pub const Type = union(enum) {
     Boolean: *const Leaf("TypeBoolean"),
@@ -730,14 +757,15 @@ pub const Type = union(enum) {
     Unit: *const Leaf("TypeUnit"),
     Self: *const Leaf("TypeSelf"),
     Generic: *const Leaf("TypeVar"),
-    // Concrete: *const ConcreteType,
+    Concrete: *const ConcreteType,
     pub const Parser = comb.ChoiceParser(@This());
 };
 
 pub const ConcreteType = struct {
-    qualifier: ?PackageQualifier,
+    qualifier: ?*const PackageQualifier,
     object: Leaf("TypeIden"),
-    arguments: []const Type,
+    // TODO: Use some kind of mapping to replace this with a plain list.
+    arguments: ?*const TypeArguments,
 
     pub const Parser = comb.fluent //
         .opt("qualifier", PackageQualifier) //
@@ -760,17 +788,6 @@ pub const PackageQualifier = struct {
 pub const TypeArguments = struct {
     arguments: []const Type,
 
-    pub fn deallocOpt(allocator: *std.mem.Allocator, instance: []const Type) void {
-        @This().Parser.deinit(allocator, TypeArguments{ .arguments = instance, .location = undefined });
-    }
-
-    pub fn substituteOpt(allocator: *std.mem.Allocator, value: ?TypeArguments) []const Type {
-        if (value) |present| {
-            return present.arguments;
-        }
-        return [_]Type{};
-    }
-
     pub const Parser = comb.fluent //
         .req("_", Leaf("PuncSquareOpen")) //
         .plusSep("arguments", Type, Leaf("PuncComma")).cut("Expected a type-argument after `[`") //
@@ -785,8 +802,8 @@ pub const Signature = struct {
     bang: ?*const Leaf("PuncBang"),
     parameters: []const Variable,
     return_types: []const Type,
-    // requires: []const Requires,
-    // ensures: []const Ensures,
+    requires: []const Requires,
+    ensures: []const Ensures,
 
     pub const Parser = comb.fluent //
         .req("modifier", FunctionModifier) //
@@ -796,9 +813,9 @@ pub const Signature = struct {
         .starSep("parameters", Variable, Leaf("PuncComma")) //
         .req("_", Leaf("PuncRoundClose")).cut("Expected a `)` to finish the function's parameters") //
         .plusSep("return_types", Type, Leaf("PuncComma")).cut("Expected the function's return type") //
-    // .star("requires", Requires) //
-    // .star("ensures", Ensures) //
-    .seq(@This());
+        .star("requires", Requires) //
+        .star("ensures", Ensures) //
+        .seq(@This());
     location: Location,
 };
 
@@ -918,15 +935,14 @@ pub const IfSt = struct {
     condition: Expression,
     then_body: Block,
     elseif_clauses: []const ElseifClause,
-    // TODO: else clause causes a compiler crash
-    // else_clause: ?ElseClause,
+    else_clause: ?*const ElseClause,
     pub const Parser = comb.fluent //
         .req("_", Leaf("KeyIf")) //
         .req("condition", Expression).cut("Expected a boolean expression after `if`") //
         .req("then_body", Block).cut("Expected a then-body after an if-condition") //
         .star("elseif_clauses", ElseifClause) //
-    // .opt("else_clause", ElseClause) //
-    .seq(@This());
+        .opt("else_clause", ElseClause) //
+        .seq(@This());
     location: Location,
 };
 
@@ -944,7 +960,7 @@ pub const ElseifClause = struct {
 pub const ElseClause = struct {
     body: Block,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("Else")) //
+        .req("_", Leaf("KeyElse")) //
         .req("body", Block).cut("Expected an else-body after `else`") //
         .seq(@This());
     location: Location,
@@ -1183,29 +1199,29 @@ pub const NamedArgument = struct {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// test "Parse simple variable declaration statement" {
-//     var blob = Blob{
-//         .name = "test",
-//         .content = "{ var vv String  = \"xyz\"; }",
-//     };
+test "Parse simple variable declaration statement" {
+    var blob = Blob{
+        .name = "test",
+        .content = "{ var vv String  = \"xyz\"; }",
+    };
 
-//     var compile_error: ParseErrorMessage = undefined;
-//     var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
+    var compile_error: ParseErrorMessage = undefined;
+    var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
 
-//     var block = Block.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
-//         error.ParseError => |m| {
-//             try compile_error.render(try std.io.getStdErr());
-//             unreachable;
-//         },
-//         else => unreachable,
-//     };
-//     assert(block.statements.len == 1);
-//     const var_decl = block.statements[0];
-//     assert(var_decl.VarSt.variables.len == 1);
-//     assert(var_decl.VarSt.init.len == 1);
-//     assert(std.mem.eql(u8, "vv", var_decl.VarSt.variables[0].v_name.value));
-//     assert(std.mem.eql(u8, "xyz", var_decl.VarSt.init[0].ChainExpr.base.base.StringLiteral.value));
-// }
+    var block = Block.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
+        error.ParseError => |m| {
+            try compile_error.render(try std.io.getStdErr());
+            unreachable;
+        },
+        else => unreachable,
+    };
+    assert(block.statements.len == 1);
+    const var_decl = block.statements[0];
+    assert(var_decl.VarSt.variables.len == 1);
+    assert(var_decl.VarSt.init.len == 1);
+    assert(std.mem.eql(u8, "vv", var_decl.VarSt.variables[0].v_name.value));
+    assert(std.mem.eql(u8, "xyz", var_decl.VarSt.init[0].ChainExpr.base.base.StringLiteral.value));
+}
 
 test "Parse simple method" {
     var blob = Blob{
@@ -1217,6 +1233,24 @@ test "Parse simple method" {
     var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
 
     var fn_def = FunctionDef.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
+        error.ParseError => |m| {
+            try compile_error.render(try std.io.getStdErr());
+            unreachable;
+        },
+        else => unreachable,
+    };
+}
+
+test "Parse program" {
+    var blob = Blob{
+        .name = "test",
+        .content = "package p; class M {}",
+    };
+
+    var compile_error: ParseErrorMessage = undefined;
+    var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
+
+    var source = Source.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
             try compile_error.render(try std.io.getStdErr());
             unreachable;
