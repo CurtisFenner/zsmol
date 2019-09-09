@@ -65,16 +65,17 @@ pub const Location = struct {
         try file.write(":");
         var buffer = [_]u8{0} ** 32;
         var width: usize = undefined;
-        width = std.fmt.formatIntBuf(&buffer, start_line, 10, false, 0);
+        const format = std.fmt.FormatOptions{};
+        width = std.fmt.formatIntBuf(&buffer, start_line, 10, false, format);
         try file.write(buffer[0..width]);
         try file.write(":");
-        width = std.fmt.formatIntBuf(&buffer, start_column, 10, false, 0);
+        width = std.fmt.formatIntBuf(&buffer, start_column, 10, false, format);
         try file.write(buffer[0..width]);
         try file.write("-");
-        width = std.fmt.formatIntBuf(&buffer, end_line, 10, false, 0);
+        width = std.fmt.formatIntBuf(&buffer, end_line, 10, false, format);
         try file.write(buffer[0..width]);
         try file.write(":");
-        width = std.fmt.formatIntBuf(&buffer, end_column, 10, false, 0);
+        width = std.fmt.formatIntBuf(&buffer, end_column, 10, false, format);
         try file.write(buffer[0..width]);
     }
 
@@ -103,7 +104,7 @@ pub const Location = struct {
             const should_draw_line = line_begin <= line + LINE_CONTEXT and line <= line_end + LINE_CONTEXT;
             if (should_draw_line and beginning_of_line) {
                 var buffer = [_]u8{0} ** 32;
-                const width = std.fmt.formatIntBuf(&buffer, line + 1, 10, false, 0);
+                const width = std.fmt.formatIntBuf(&buffer, line + 1, 10, false, std.fmt.FormatOptions{});
                 var padding = LINE_NUM_WIDTH - width;
                 while (padding != 0) {
                     try file.write(" ");
@@ -220,6 +221,13 @@ const InternalParseErrors = error{
     OutOfMemory,
 };
 
+fn makeParseError(allocator: *std.mem.Allocator, location: Location, cut_message: []const u8) !ParseErrorMessage {
+    var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
+    entries[0] = ParseErrorMessage.Entry{ .Text = cut_message };
+    entries[1] = ParseErrorMessage.Entry{ .AtLocation = location };
+    return ParseErrorMessage{ .entries = entries };
+}
+
 pub fn Combinators(comptime Token: type) type {
     return struct {
         /// A Stream represents a tokenized text source.
@@ -246,8 +254,8 @@ pub fn Combinators(comptime Token: type) type {
             min_take_count: usize,
 
             /// The maximum number of elements to take (e.g., `1` for `?`)
-            /// A negative maximum take means no limit.
-            max_take_count: isize,
+            /// A max_take_count of zero means no limit.
+            max_take_count: usize,
 
             /// The type for separating the field when it is repeated.
             /// Separators are dropped from the AST after parsing.
@@ -261,69 +269,14 @@ pub fn Combinators(comptime Token: type) type {
             /// `"Expected a `)` to finish a function call"`.
             cut_message: ?[]const u8,
 
-            fn preparedType(comptime self: Field) type {
-                if (comptime self.max_take_count == 1) {
-                    if (comptime self.min_take_count == 0) {
-                        if (comptime self.isSubstitutedOpt()) |ST| {
-                            return ST;
-                        }
+            fn structType(comptime self: Field) type {
+                if (self.max_take_count == 1) {
+                    if (self.min_take_count == 1) {
+                        return self.CT;
                     }
+                    return ?*const self.CT;
                 }
-
-                return self.rawType();
-            }
-
-            fn rawType(comptime field: Field) type {
-                if (field.max_take_count == 1) {
-                    if (field.min_take_count == 0) {
-                        return ?field.CT;
-                    }
-                    return field.CT;
-                } else {
-                    return []const field.CT;
-                }
-            }
-
-            fn prepare(comptime self: Field, allocator: *std.mem.Allocator, field_value: self.rawType()) self.preparedType() {
-                if (comptime self.max_take_count == 1) {
-                    if (comptime self.min_take_count == 0) {
-                        if (comptime self.isSubstitutedOpt()) |ST| {
-                            return self.CT.substituteOpt(allocator, field_value);
-                        }
-                    }
-                }
-                return field_value;
-            }
-
-            fn pleaseDeinit(comptime self: Field, allocator: *std.mem.Allocator, field_value: var) void {
-                // Treat mapped types specially
-                if (comptime self.isSubstitutedOpt()) |ST| {
-                    self.CT.deallocOpt(allocator, field_value);
-                } else if (comptime self.max_take_count == 1) {
-                    if (self.min_take_count == 0) {
-                        if (field_value) |present| {
-                            self.CT.Parser.deinit(allocator, present);
-                        }
-                    } else {
-                        self.CT.Parser.deinit(allocator, field_value);
-                    }
-                } else {
-                    for (field_value) |element| {
-                        self.CT.Parser.deinit(allocator, element);
-                    }
-                    allocator.free(field_value);
-                }
-            }
-
-            fn isSubstitutedOpt(comptime field: Field) ?type {
-                inline for (std.meta.declarations(field.CT)) |decl| {
-                    if (comptime field.min_take_count == 0 and field.max_take_count == 1) {
-                        if (comptime std.mem.eql(u8, decl.name, "substituteOpt")) {
-                            return decl.data.Fn.return_type;
-                        }
-                    }
-                }
-                return null;
+                return []const self.CT;
             }
         };
         const grammar = @This();
@@ -454,6 +407,20 @@ pub fn Combinators(comptime Token: type) type {
             }
         };
 
+        fn InternalParseUnion(comptime T: type) type {
+            return union(enum) {
+                Result: InternalParseResult(T),
+                NoMatch: void,
+                Error: ParseErrorMessage,
+            };
+        }
+
+        const FieldResultUnion = union(enum) {
+            Success: void,
+            Fail: void,
+            Error: ParseErrorMessage,
+        };
+
         fn InternalParseResult(comptime T: type) type {
             return struct {
                 value: T,
@@ -465,20 +432,22 @@ pub fn Combinators(comptime Token: type) type {
             return struct {
                 pub fn deinit(allocator: *std.mem.Allocator, self: Into) void {}
 
-                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize, parse_error: *ParseErrorMessage) InternalParseErrors!InternalParseResult(Into) {
+                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
                     if (stream.tokens.len == from) {
-                        return error.NoMatch;
+                        return InternalParseUnion(Into){ .NoMatch = {} };
                     }
                     const head = stream.tokens[from];
-                    switch (stream.tokens[from]) {
-                        pattern => |value| return InternalParseResult(Into){
-                            .consumed = 1,
-                            .value = Into{
-                                .value = value,
-                                .location = stream.locations[from],
+                    switch (head) {
+                        pattern => |value| return InternalParseUnion(Into){
+                            .Result = InternalParseResult(Into){
+                                .consumed = 1,
+                                .value = Into{
+                                    .value = value,
+                                    .location = stream.locations[from],
+                                },
                             },
                         },
-                        else => return error.NoMatch,
+                        else => return InternalParseUnion(Into){ .NoMatch = {} },
                     }
                 }
             };
@@ -486,196 +455,175 @@ pub fn Combinators(comptime Token: type) type {
 
         pub fn ChoiceParser(comptime Into: type) type {
             return struct {
-                pub fn deinit(allocator: *std.mem.Allocator, self: Into) void {
-                    const TagType = @TagType(Into);
-                    inline for (std.meta.fields(Into)) |field| {
-                        if (@enumToInt(std.meta.activeTag(self)) == field.enum_field.?.value) {
-                            var subvalue = @field(self, field.name);
-                            @typeOf(subvalue.*).Parser.deinit(allocator, subvalue.*);
-                            allocator.destroy(@field(self, field.name));
-                        }
-                    }
-                }
-
-                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize, parse_error: *ParseErrorMessage) InternalParseErrors!InternalParseResult(Into) {
-                    @setRuntimeSafety(false);
-                    inline for (std.meta.fields(Into)) |field| {
-                        // Members of choice unions must be pointers to const.
+                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
+                    const fields = std.meta.fields(Into);
+                    inline for (fields) |field| {
                         const FieldType = @typeInfo(field.field_type).Pointer.child;
-                        if (FieldType.Parser._parse(allocator, stream, from, parse_error)) |result| {
-                            var field_value = try allocator.create(FieldType);
-                            field_value.* = result.value;
-
-                            var choice: Into = @unionInit(Into, field.name, field_value);
-                            return InternalParseResult(Into){
-                                .value = choice,
-                                .consumed = result.consumed,
+                        const result = try @noInlineCall(FieldType.Parser._parse, allocator, stream, from);
+                        // TODO(#27272): Use a switch.
+                        const Tags = @TagType(@typeOf(result));
+                        const tag = Tags(result);
+                        if (tag == Tags.Result) {
+                            var ptr = try allocator.create(@typeOf(result.Result.value));
+                            ptr.* = result.Result.value;
+                            return InternalParseUnion(Into){
+                                .Result = InternalParseResult(Into){
+                                    .value = @unionInit(Into, field.name, ptr),
+                                    .consumed = result.Result.consumed,
+                                },
                             };
-                        } else |err| switch (err) {
-                            error.NoMatch => {},
-                            error.ParseError => return error.ParseError,
-                            error.OutOfMemory => return error.OutOfMemory,
+                        } else if (tag == Tags.NoMatch) {
+                            // Continue to the next variant.
+                        } else if (tag == Tags.Error) {
+                            return InternalParseUnion(Into){ .Error = result.Error };
+                        } else {
+                            assert(false);
                         }
                     }
-                    return error.NoMatch;
+                    assert(fields.len < 3);
+                    return InternalParseUnion(Into){ .NoMatch = {} };
                 }
             };
         }
 
         pub fn SequenceParser(comptime Into: type, comptime fields: []const Field) type {
             return struct {
-                pub fn _deinitFirst(allocator: *std.mem.Allocator, self: Into, first: usize) void {
-                    inline for (fields) |field, i| {
-                        if (i < first) {
-                            if (comptime !std.mem.eql(u8, "_", field.name)) {
-                                const field_value = @field(self, field.name);
-                                field.pleaseDeinit(allocator, field_value);
-                            }
-                        }
-                    }
-                }
-
-                pub fn deinit(allocator: *std.mem.Allocator, self: Into) void {
-                    @This()._deinitFirst(allocator, self, fields.len);
-                }
-
-                pub fn parse(allocator: *std.mem.Allocator, stream: Stream, parse_error: *ParseErrorMessage) ParseErrors!Into {
-                    var result = @This()._parse(allocator, stream, 0, parse_error) catch |err| switch (err) {
-                        error.NoMatch => {
+                pub fn parse(allocator: *std.mem.Allocator, stream: Stream, parse_error: *ParseErrorMessage) error{
+                    OutOfMemory,
+                    ParseError,
+                }!Into {
+                    const ru = try @This()._parse(allocator, stream, 0);
+                    switch (ru) {
+                        .NoMatch => {
                             var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
                             entries[0] = ParseErrorMessage.Entry{ .Text = "Expected " ++ @typeName(Into) };
                             entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[0] };
                             parse_error.* = ParseErrorMessage{ .entries = entries };
                             return error.ParseError;
                         },
-                        error.ParseError => return error.ParseError,
-                        error.OutOfMemory => return error.OutOfMemory,
-                    };
-
-                    if (result.consumed != stream.tokens.len) {
-                        var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                        entries[0] = ParseErrorMessage.Entry{ .Text = "Unexpected end to " ++ @typeName(Into) };
-                        entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[result.consumed] };
-                        parse_error.* = ParseErrorMessage{ .entries = entries };
-                        return error.ParseError;
+                        .Error => |e| {
+                            parse_error.* = e;
+                            return error.ParseError;
+                        },
+                        .Result => |result| {
+                            if (result.consumed != stream.tokens.len) {
+                                var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
+                                entries[0] = ParseErrorMessage.Entry{ .Text = "Unexpected end to " ++ @typeName(Into) };
+                                entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[result.consumed] };
+                                parse_error.* = ParseErrorMessage{ .entries = entries };
+                                return error.ParseError;
+                            }
+                            return result.value;
+                        },
                     }
-                    return result.value;
                 }
 
-                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize, parse_error: *ParseErrorMessage) InternalParseErrors!InternalParseResult(Into) {
-                    var result: Into = undefined;
-                    var consumed: usize = 0;
-                    var progress: usize = 0;
-                    errdefer {
-                        // TODO: Use a bump-allocator that doesn't require recursive deallocation.
-                        @This()._deinitFirst(allocator, result, progress);
-                    }
+                fn _parseField(comptime field: Field, result: var, stream: Stream, from: usize, consumed: *usize, allocator: *std.mem.Allocator) error{OutOfMemory}!FieldResultUnion {
+                    // Parse a repeated field.
+                    var list = std.ArrayList(field.CT).init(allocator);
 
-                    inline for (fields) |field, fi| {
-                        var subAST: field.preparedType() = undefined;
-                        // Parse the field.
-                        if (field.max_take_count == 1) {
-                            // Parse a required/optional field.
-                            if (field.CT.Parser._parse(allocator, stream, from + consumed, parse_error)) |subresult| {
-                                subAST = field.prepare(allocator, subresult.value);
-                                consumed += subresult.consumed;
-                            } else |err| switch (err) {
-                                error.NoMatch => {
-                                    if (comptime field.min_take_count == 0) {
-                                        subAST = field.prepare(allocator, null);
-                                    } else {
-                                        if (field.cut_message) |cut_message| {
-                                            var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                                            entries[0] = ParseErrorMessage.Entry{ .Text = cut_message };
-                                            entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[from + consumed] };
-                                            parse_error.* = ParseErrorMessage{ .entries = entries };
-                                            return error.ParseError;
-                                        }
-                                        return error.NoMatch;
-                                    }
-                                },
-                                error.ParseError => {
-                                    return InternalParseErrors.ParseError;
-                                },
-                                error.OutOfMemory => {
-                                    return err;
-                                },
-                            }
-                        } else {
-                            // Parse a repeated field.
-                            var list = std.ArrayList(field.CT).init(allocator);
-
-                            var truth = true;
-                            while (truth) {
-                                // Parse a separator, if any.
-                                var sep_consumed: usize = 0;
-                                if (field.separator) |sep| {
-                                    if (list.count() != 0) {
-                                        if (sep.Parser._parse(allocator, stream, from + consumed, parse_error)) |subresult| {
-                                            sep.Parser.deinit(allocator, subresult.value);
-                                            consumed += subresult.consumed;
-                                            sep_consumed = subresult.consumed;
-                                        } else |err| switch (err) {
-                                            error.NoMatch => {
-                                                break;
-                                            },
-                                            error.ParseError => {
-                                                return err;
-                                            },
-                                            error.OutOfMemory => {
-                                                return err;
-                                            },
-                                        }
-                                    }
-                                }
-
-                                // Parse an element in the list.
-                                if (field.CT.Parser._parse(allocator, stream, from + consumed, parse_error)) |subresult| {
-                                    try list.append(subresult.value);
-                                    consumed += subresult.consumed;
-                                } else |err| switch (err) {
-                                    error.NoMatch => {
-                                        consumed -= sep_consumed;
+                    while (field.max_take_count <= 0 or list.count() < field.max_take_count) {
+                        // Parse a separator, if any.
+                        var sep_consumed: usize = 0;
+                        if (comptime field.separator) |sep| {
+                            if (list.count() != 0) {
+                                const separator = try sep.Parser._parse(allocator, stream, from + consumed.*);
+                                // TODO: free separator's memory
+                                switch (separator) {
+                                    .Result => |r| {
+                                        consumed.* += r.consumed;
+                                        sep_consumed = r.consumed;
+                                    },
+                                    .NoMatch => {
                                         break;
                                     },
-                                    error.ParseError => {
-                                        return err;
-                                    },
-                                    error.OutOfMemory => {
-                                        return err;
+                                    .Error => |e| {
+                                        return FieldResultUnion{ .Error = e };
                                     },
                                 }
                             }
-
-                            var enough = list.count() >= field.min_take_count;
-                            if (!enough) {
-                                if (field.cut_message) |cut_message| {
-                                    var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                                    entries[0] = ParseErrorMessage.Entry{ .Text = cut_message };
-                                    entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[from + consumed] };
-                                    parse_error.* = ParseErrorMessage{ .entries = entries };
-                                    return error.ParseError;
-                                }
-                                return error.NoMatch;
-                            }
-                            subAST = field.prepare(allocator, list.toOwnedSlice());
                         }
 
-                        // Attach the sub-result onto the AST.
-                        if (comptime std.mem.eql(u8, "_", field.name)) {
-                            assert(field.max_take_count == 1);
-                            field.CT.Parser.deinit(allocator, subAST);
+                        // Parse an element in the list.
+                        var element: field.CT = undefined;
+                        const raw = try field.CT.Parser._parse(allocator, stream, from + consumed.*);
+                        switch (raw) {
+                            .Result => |r| {
+                                element = r.value;
+                                consumed.* += r.consumed;
+                            },
+                            .Error => |e| {
+                                return FieldResultUnion{ .Error = e };
+                            },
+                            .NoMatch => {
+                                break;
+                            },
+                        }
+                        try list.append(element);
+                    }
+
+                    var enough = list.count() >= field.min_take_count;
+                    if (!enough) {
+                        if (field.cut_message) |cut_message| {
+                            var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
+                            entries[0] = ParseErrorMessage.Entry{ .Text = cut_message };
+                            entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[from + consumed.*] };
+                            return FieldResultUnion{ .Error = ParseErrorMessage{ .entries = entries } };
+                        }
+                        return FieldResultUnion{ .Fail = {} };
+                    }
+
+                    // Attach the sub-result onto the AST.
+                    if (comptime std.mem.eql(u8, "_", field.name)) {
+                        assert(field.max_take_count == 1);
+                        // TODO: Free the memory of the elements in the list
+                    } else {
+                        if (field.max_take_count == 1) {
+                            if (field.min_take_count == 0) {
+                                if (list.count() == 0) {
+                                    @field(result, field.name) = &list.toOwnedSlice()[0];
+                                } else {
+                                    // TODO: Recover memory?
+                                    @field(result, field.name) = null;
+                                }
+                            } else {
+                                // TODO: Recover memory
+                                @field(result, field.name) = list.toOwnedSlice()[0];
+                            }
                         } else {
-                            @field(result, field.name) = subAST;
+                            @field(result, field.name) = list.toOwnedSlice();
                         }
-                        progress = fi + 1;
+                    }
+                    return FieldResultUnion{ .Success = {} };
+                }
+
+                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
+                    var result: Into = undefined;
+                    var consumed: usize = 0;
+                    // TODO: Use a bump-allocator that doesn't require recursive deallocation.
+
+                    inline for (fields) |field| {
+                        const r = try @noInlineCall(@This()._parseField, field, &result, stream, from, &consumed, allocator);
+                        const Tags = @TagType(@typeOf(r));
+                        const tag = Tags(r);
+                        if (tag == Tags.Success) {
+                            // Continue to the next field.
+                        } else if (tag == Tags.Fail) {
+                            return InternalParseUnion(Into){ .NoMatch = {} };
+                        } else if (tag == Tags.Error) {
+                            return InternalParseUnion(Into){ .Error = r.Error };
+                        } else {
+                            assert(false);
+                        }
                     }
 
                     // Produce the finished result, including Location annotations.
                     result.location = stream.locations[from].span(stream.locations[from + consumed]);
-                    return InternalParseResult(Into){
-                        .consumed = consumed,
-                        .value = result,
+                    return InternalParseUnion(Into){
+                        .Result = InternalParseResult(Into){
+                            .consumed = consumed,
+                            .value = result,
+                        },
                     };
                 }
             };
@@ -715,5 +663,97 @@ test "Separator" {
         .locations = [_]Location{ undefined, undefined },
     };
 
-    const result = try C.Parser.parse(std.debug.global_allocator, stream, undefined);
+    var buffer: [4000]u8 = undefined;
+    var buffer_allocator = std.heap.FixedBufferAllocator.init(&buffer);
+    var allocator = &buffer_allocator.allocator;
+    const result = try C.Parser.parse(allocator, stream, undefined);
+}
+
+test "Lisp" {
+    const Token = union(enum) {
+        TOpen: void,
+        TClose: void,
+        TAtom: []const u8,
+    };
+
+    const comb = Combinators(Token);
+
+    const Lexer = struct {
+        fn tokenize(allocator: *std.mem.Allocator, blob: *const Blob) !comb.Stream {
+            var tokens = std.ArrayList(Token).init(allocator);
+            var locations = std.ArrayList(Location).init(allocator);
+            for (blob.content) |c, i| {
+                if (c == ' ') {
+                    continue;
+                }
+                try locations.append(Location{ .blob = blob, .begin = i, .end = i + 1 });
+                if (c == '(') {
+                    try tokens.append(Token{ .TOpen = {} });
+                } else if (c == ')') {
+                    try tokens.append(Token{ .TClose = {} });
+                } else {
+                    try tokens.append(Token{ .TAtom = blob.content[i .. i + 1] });
+                }
+            }
+            try locations.append(Location{ .blob = blob, .begin = blob.content.len, .end = blob.content.len });
+            return comb.Stream{ .tokens = tokens.toOwnedSlice(), .locations = locations.toOwnedSlice() };
+        }
+    };
+
+    const AST = struct {
+        const Open = struct {
+            value: void,
+            const Parser = comb.TokenParser(@This(), Token.TOpen);
+            location: Location,
+        };
+        const Close = struct {
+            value: void,
+            const Parser = comb.TokenParser(@This(), Token.TClose);
+            location: Location,
+        };
+        const Atom = struct {
+            value: []const u8,
+            const Parser = comb.TokenParser(@This(), Token.TAtom);
+            location: Location,
+        };
+        const Expr = union(enum) {
+            Atom: *const Atom,
+            Phrase: *const Phrase,
+            const Parser = comb.ChoiceParser(@This());
+        };
+        const Phrase = struct {
+            open: Open,
+            args: []const Expr,
+            close: Close,
+            const Parser = comb.fluent //
+                .req("open", Open) //
+                .star("args", Expr) //
+                .req("close", Close).cut("need `)`") //
+                .seq(@This());
+            location: Location,
+        };
+    };
+
+    var buffer: [4000]u8 = undefined;
+    var buffer_allocator = std.heap.FixedBufferAllocator.init(&buffer);
+    var allocator = &buffer_allocator.allocator;
+    const blob = Blob{ .name = "test", .content = "(a (b c d) (e f) () g)" };
+    const stream = try Lexer.tokenize(allocator, &blob);
+
+    var parse_error: ParseErrorMessage = undefined;
+
+    const stdout_file = try std.io.getStdOut();
+    const result = AST.Phrase.Parser.parse(allocator, stream, &parse_error) catch |err| switch (err) {
+        error.ParseError => |e| {
+            try parse_error.render(stdout_file);
+            return e;
+        },
+        error.OutOfMemory => |e| return e,
+    };
+    assert(result.args.len == 5);
+    assert(std.mem.eql(u8, result.args[0].Atom.value, "a"));
+    assert(result.args[1].Phrase.args.len == 3);
+    assert(result.args[2].Phrase.args.len == 2);
+    assert(result.args[3].Phrase.args.len == 0);
+    assert(std.mem.eql(u8, result.args[4].Atom.value, "g"));
 }
