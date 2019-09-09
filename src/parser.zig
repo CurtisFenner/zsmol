@@ -480,7 +480,6 @@ pub fn Combinators(comptime Token: type) type {
                             assert(false);
                         }
                     }
-                    assert(fields.len < 3);
                     return InternalParseUnion(Into){ .NoMatch = {} };
                 }
             };
@@ -580,7 +579,8 @@ pub fn Combinators(comptime Token: type) type {
                     } else {
                         if (field.max_take_count == 1) {
                             if (field.min_take_count == 0) {
-                                if (list.count() == 0) {
+                                if (list.count() == 1) {
+                                    // TODO: Recover memory?
                                     @field(result, field.name) = &list.toOwnedSlice()[0];
                                 } else {
                                     // TODO: Recover memory?
