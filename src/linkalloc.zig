@@ -540,8 +540,10 @@ pub const LinkAllocator = struct {
             } else {
                 std.debug.warn("\tFILLED block {}: ends at {} (size {})\n", block.first_word, block.end_word, block.end_word - block.first_word);
             }
-            std.debug.warn("\t\t[{}] is {}\n", block.end_word - 1, self.data_as_words[block.end_word - 1]);
-            if (self.data_as_words[block.end_word - 1] != index) bad = true;
+            if (self.data_as_words[block.end_word - 1] != index) {
+                std.debug.warn("\t\t[{}] is {}\n", block.end_word - 1, self.data_as_words[block.end_word - 1]);
+                bad = true;
+            }
             index = block.end_word;
         }
         std.debug.warn("===========================================\n\n\n");
