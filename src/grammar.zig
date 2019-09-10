@@ -292,9 +292,32 @@ const TokenizeResult = struct {
     token: ?Token,
 };
 
-fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ParseErrorMessage) !TokenizeResult {
-    const string_body_class = CharacterClass.fromRange(32, 127);
+fn parseIntLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ParseErrorMessage) !TokenizeResult {
+    const lowercase = CharacterClass.fromRange('a', 'z');
+    const uppercase = CharacterClass.fromRange('A', 'Z');
+    const digits = CharacterClass.fromRange('0', '9');
+    const underscore = CharacterClass.fromList("_");
 
+    // Find the stop of this "word".
+    const stop = lowercase.sum(uppercase).sum(digits).sum(underscore).match(blob.content[from..]);
+
+    // TODO: Allow underscores in literals (e.g., `1_000_000`).
+    const check = digits.match(blob.content[from..]);
+
+    const value = std.fmt.parseInt(i64, blob.content[from .. from + stop], 10) catch |err| switch (err) {
+        error.Overflow, error.InvalidCharacter => {
+            const location = Location{ .blob = blob, .begin = from, .end = from + stop };
+            compile_error.* = try parser.makeParseError(allocator, location, "Malformed number literal");
+            return error.ParseError;
+        },
+    };
+    return TokenizeResult{
+        .consumed = stop,
+        .token = Token{ .IntLiteral = value },
+    };
+}
+
+fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ParseErrorMessage) !TokenizeResult {
     // TODO: Avoid multiple allocations by doing two passes.
     var storage = std.ArrayList(u8).init(allocator);
     errdefer storage.deinit();
@@ -418,6 +441,8 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
         if (recognizePattern(operator_strs, op)) |op_token| {
             return TokenizeResult{ .consumed = op.len, .token = op_token };
         }
+    } else if ('0' <= at and at <= '9') {
+        return parseIntLiteral(allocator, blob, from, compile_error);
     } else if (at == '"') {
         return parseStringLiteral(allocator, blob, from, compile_error);
     }
@@ -435,7 +460,7 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
     return error.ParseError;
 }
 
-fn tokenize(allocator: *std.mem.Allocator, blob: *const parser.Blob, compile_error: *parser.ParseErrorMessage) !comb.Stream {
+pub fn tokenize(allocator: *std.mem.Allocator, blob: *const parser.Blob, compile_error: *parser.ParseErrorMessage) !comb.Stream {
     var tokens = ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
     var locations = ArrayList(Location).init(allocator);
@@ -536,8 +561,7 @@ test "Tokenize `if`" {
 pub fn parseSource(allocator: *std.mem.Allocator, blob: Blob, compile_error: *ParseErrorMessage) !Source {
     const stream = try tokenize(allocator, &blob, compile_error);
     const source = try Source.Parser.parse(allocator, stream, compile_error);
-    // return source;
-    return error.OutOfMem;
+    return source;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

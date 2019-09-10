@@ -223,7 +223,7 @@ const InternalParseErrors = error{
     OutOfMemory,
 };
 
-fn makeParseError(allocator: *std.mem.Allocator, location: Location, cut_message: []const u8) !ParseErrorMessage {
+pub fn makeParseError(allocator: *std.mem.Allocator, location: Location, cut_message: []const u8) !ParseErrorMessage {
     var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
     entries[0] = ParseErrorMessage.Entry{ .Text = cut_message };
     entries[1] = ParseErrorMessage.Entry{ .AtLocation = location };
