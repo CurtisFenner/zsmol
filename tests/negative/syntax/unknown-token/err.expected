@@ -1,0 +1,6 @@
+ERROR:
+Unrecognized token at test.smol:4:16-4:17:
+         3 | class Test {
+         4 |     static main$() Unit {
+           |                ^
+         5 |         var x String = "foo";

@@ -1,0 +1,15 @@
+package test;
+
+union Empty {
+}
+
+class Test {
+	static process(empty Empty) Unit {
+		match empty {
+		}
+	}
+
+	static main() Unit {
+
+	}
+}

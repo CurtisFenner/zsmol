@@ -36,7 +36,7 @@ pub const Location = struct {
     const LINE_CONTEXT: usize = 1;
     const TAB_SIZE: usize = 4;
 
-    pub fn printPosition(location: Location, file: var) !void {
+    pub fn printPosition(location: Location, file: var, diagnostic_base: ?[]const u8) !void {
         var start_line: usize = undefined;
         var start_column: usize = undefined;
         var end_line: usize = 1;
@@ -57,13 +57,17 @@ pub const Location = struct {
             } else if (c == '\r') {
                 // Ignore
             } else if (c == '\t') {
-                end_column += TAB_SIZE - end_column % TAB_SIZE;
+                end_column += TAB_SIZE - (end_column + TAB_SIZE - 1) % TAB_SIZE;
             } else {
                 end_column += 1;
             }
         }
 
-        try file.write(location.blob.name);
+        if (diagnostic_base != null and std.mem.startsWith(u8, location.blob.name, diagnostic_base.?)) {
+            try file.write(location.blob.name[diagnostic_base.?.len..]);
+        } else {
+            try file.write(location.blob.name);
+        }
         try file.write(":");
         var buffer = [_]u8{0} ** 32;
         var width: usize = undefined;
@@ -195,14 +199,14 @@ pub const ParseErrorMessage = struct {
 
     entries: []const Entry,
 
-    pub fn render(e: ParseErrorMessage, file: var) !void {
+    pub fn render(e: ParseErrorMessage, file: var, diagnostic_base: ?[]const u8) !void {
         try file.write("ERROR:\n");
         for (e.entries) |entry| {
             switch (entry) {
                 .Text => |t| try file.write(t),
                 .AtLocation => |loc| {
                     try file.write(" at ");
-                    try loc.printPosition(file);
+                    try loc.printPosition(file, diagnostic_base);
                     try file.write(":\n");
                     try loc.printExcerpt(file);
                 },
@@ -429,6 +433,22 @@ pub fn Combinators(comptime Token: type) type {
                 consumed: usize,
             };
         }
+
+        pub const EofParser = struct {
+            nothing: usize,
+            pub const Parser = struct {
+                pub fn _deinit(allocator: *std.mem.Allocator, self: EofParser) void {}
+
+                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(EofParser) {
+                    if (stream.tokens.len != from) {
+                        return InternalParseUnion(EofParser){ .NoMatch = {} };
+                    }
+                    return InternalParseUnion(EofParser){
+                        .Result = InternalParseResult(EofParser){ .consumed = 0, .value = EofParser{ .nothing = undefined } },
+                    };
+                }
+            };
+        };
 
         pub fn TokenParser(comptime Into: type, comptime pattern: @TagType(Token)) type {
             return struct {

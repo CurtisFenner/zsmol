@@ -1,0 +1,6 @@
+ERROR:
+Expected one or more match case clauses at test.smol:9:9-9:10:
+         8 |         match empty {
+         9 |         }
+           |         ^
+        10 |     }

@@ -450,7 +450,7 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
     }
 
     var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-    entries[0] = ParseErrorMessage.Entry{ .Text = "Unknown byte" };
+    entries[0] = ParseErrorMessage.Entry{ .Text = "Unrecognized token" };
     entries[1] = ParseErrorMessage.Entry{
         .AtLocation = Location{
             .blob = blob,
@@ -592,6 +592,7 @@ pub const Source = struct {
         .req("package", PackageDef) //
         .star("imports", Import) //
         .star("definitions", Definition) //
+        .req("_", comb.EofParser).cut("Expected the beginning of another definition") //
         .seq(@This());
     location: Location,
 };
