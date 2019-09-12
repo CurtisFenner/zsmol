@@ -155,7 +155,7 @@ pub const Location = struct {
                 column += 1;
             }
 
-            if (i == location.blob.content.len - 1 and should_draw_line) {
+            if (c != '\n' and i == location.blob.content.len - 1 and should_draw_line) {
                 // Insert an artificial line break if the file doesn't end with
                 // one.
                 try file.write("\n");
@@ -196,7 +196,7 @@ pub const ParseErrorMessage = struct {
     entries: []const Entry,
 
     pub fn render(e: ParseErrorMessage, file: var) !void {
-        try file.write("ERROR: ");
+        try file.write("ERROR:\n");
         for (e.entries) |entry| {
             switch (entry) {
                 .Text => |t| try file.write(t),
