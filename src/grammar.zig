@@ -357,6 +357,8 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
                         .end = from + i + 1,
                     },
                 };
+                compile_error.* = ParseErrorMessage{ .entries = entries };
+                return error.ParseError;
             }
             escaped = false;
         } else {
