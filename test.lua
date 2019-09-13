@@ -1,4 +1,4 @@
--- Test script for the Lua smol compiler.
+-- Test script for the Smol compiler.
 -- To run all tests,
 --         lua test.lua
 
@@ -153,7 +153,7 @@ for _, group in ipairs(ls "tests\\negative") do
 			id = "-" .. test,
 			run = function()
 				local sources = ls(test, "smol")
-				local cmd = "\"\"./built/main\"\" interpet " .. table.concat(sources, " ") .. " > " .. path {test, "err.actual"} .. " --diagnostic-base " .. test  .. "\\ 2>&1"
+				local cmd = "\"\"./built/main\"\" interpet " .. table.concat(sources, " ") .. " --diagnostic-base " .. test  .. "\\ > " .. path {test, "err.actual"} .. " 2>&1"
 				local _, code = shell(cmd)
 				if code ~= 40 then
 					return "fail", string.format("Expected code `40` but got `%d`.", code)
@@ -217,22 +217,25 @@ function REPORT()
 end
 
 --------------------------------------------------------------------------------
+local query = arg[1]
 
 for _, test in ipairs(tests) do
-	-- TODO: filtering
-	local result, message = test.run()
-	assert(result == "fail" or result == "pass")
-	if result == "pass" then
-		PASS {
-			name = test.id,
-		}
-	else
-		assert(type(message) == "string")
-		FAIL {
-			name = test.id,
-			message = message,
-		}
-		print()
+	local matches = not query or test.id:find(query, 1, false)
+	if matches then
+		local result, message = test.run()
+		assert(result == "fail" or result == "pass")
+		if result == "pass" then
+			PASS {
+				name = test.id,
+			}
+		else
+			assert(type(message) == "string")
+			FAIL {
+				name = test.id,
+				message = message,
+			}
+			print()
+		end
 	end
 end
 

@@ -1,9 +1,11 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const LinkAllocator = @import("linkalloc.zig");
+
 const interpreter = @import("interpreter.zig");
 const grammar = @import("grammar.zig");
-const LinkAllocator = @import("linkalloc.zig");
+const semantics = @import("semantics.zig");
 
 fn blobFromFile(allocator: *std.mem.Allocator, file_name: []const u8) !grammar.Blob {
     const source_file = try std.fs.File.openRead(file_name);
@@ -60,7 +62,7 @@ const CommandArgs = struct {
             }
             i += 1;
         }
-        return CommandArgs{ .flags = flags, .plain = plain };
+        return CommandArgs{ .flags = flags[0..flag_index], .plain = plain[0..plain_index] };
     }
 
     pub fn find(self: CommandArgs, key: []const u8) ?[]const u8 {
@@ -83,7 +85,8 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
     const stderr_file = try std.io.getStdErr();
     var parse_error: grammar.ParseErrorMessage = undefined;
 
-    for (command_args) |arg| {
+    // Parse the source files.
+    for (args.plain) |arg| {
         const blob = try blobFromFile(allocator, arg);
         const source = grammar.parseSource(allocator, blob, &parse_error) catch |err| switch (err) {
             error.OutOfMemory => return err,
@@ -94,6 +97,8 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
         };
         try sources.append(source);
     }
+
+    const program = try semantics.semantics(allocator, sources.toOwnedSlice());
 
     // TODO: Interpet.
     return 1;

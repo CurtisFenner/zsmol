@@ -88,6 +88,7 @@ pub const Token = union(enum) {
     KeyResume: void,
     KeyService: void,
     KeyType: void,
+    KeyTest: void,
     KeyUntil: void,
     KeyWhile: void,
     KeyYield: void,
@@ -201,6 +202,7 @@ const keyword_strs = [_]KeywordPattern{
     KeywordPattern{ .word = "resource", .token = Token{ .KeyResource = {} } },
     KeywordPattern{ .word = "resume", .token = Token{ .KeyResume = {} } },
     KeywordPattern{ .word = "service", .token = Token{ .KeyService = {} } },
+    KeywordPattern{ .word = "test", .token = Token{ .KeyTest = {} } },
     KeywordPattern{ .word = "type", .token = Token{ .KeyType = {} } },
     KeywordPattern{ .word = "until", .token = Token{ .KeyUntil = {} } },
     KeywordPattern{ .word = "while", .token = Token{ .KeyWhile = {} } },
@@ -632,7 +634,7 @@ pub const ImportOfObject = struct {
 
     pub const Parser = comb.fluent //
         .req("package_name", Leaf("Iden")) //
-        .req("_", Leaf("PuncDot")) //
+        .req("_", Leaf("PuncColon")) //
         .req("object_name", Leaf("TypeIden")) //
         .seq(@This());
     location: Location,
