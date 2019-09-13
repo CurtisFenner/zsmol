@@ -4,12 +4,12 @@ union Empty {
 }
 
 class Test {
-	static process(empty Empty) Unit {
+	fn process(empty Empty) Unit {
 		match empty {
 		}
 	}
 
-	static main() Unit {
+	fn main() Unit {
 
 	}
 }

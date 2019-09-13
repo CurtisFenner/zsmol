@@ -1,5 +1,5 @@
 ERROR:
-Expected the beginning of another definition at test.smol:9:1-9:7:
+Expected the beginning of another definition at test.smol:9:1-9:3:
          8 | 
-         9 | static other() Unit {}
-           | ^^^^^^
+         9 | fn other() Unit {}
+           | ^^

@@ -1,9 +1,9 @@
 package testing;
 
 class Test {
-	static main() Unit {
+	fn main() Unit {
 		var x String = "foo";
 	}
 }
 
-static other() Unit {}
+fn other() Unit {}

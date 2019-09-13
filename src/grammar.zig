@@ -60,7 +60,7 @@ pub const Token = union(enum) {
     KeyPackage: void,
     KeyRequires: void,
     KeyReturn: void,
-    KeyStatic: void,
+    KeyFn: void,
     KeyThis: void,
     KeyTrue: void,
     KeyUnion: void,
@@ -169,6 +169,7 @@ const keyword_strs = [_]KeywordPattern{
     KeywordPattern{ .word = "elseif", .token = Token{ .KeyElseif = {} } },
     KeywordPattern{ .word = "ensures", .token = Token{ .KeyEnsures = {} } },
     KeywordPattern{ .word = "false", .token = Token{ .KeyFalse = {} } },
+    KeywordPattern{ .word = "fn", .token = Token{ .KeyFn = {} } },
     KeywordPattern{ .word = "forall", .token = Token{ .KeyForall = {} } },
     KeywordPattern{ .word = "foreign", .token = Token{ .KeyForeign = {} } },
     KeywordPattern{ .word = "if", .token = Token{ .KeyIf = {} } },
@@ -182,7 +183,6 @@ const keyword_strs = [_]KeywordPattern{
     KeywordPattern{ .word = "package", .token = Token{ .KeyPackage = {} } },
     KeywordPattern{ .word = "requires", .token = Token{ .KeyRequires = {} } },
     KeywordPattern{ .word = "return", .token = Token{ .KeyReturn = {} } },
-    KeywordPattern{ .word = "static", .token = Token{ .KeyStatic = {} } },
     KeywordPattern{ .word = "this", .token = Token{ .KeyThis = {} } },
     KeywordPattern{ .word = "true", .token = Token{ .KeyTrue = {} } },
     KeywordPattern{ .word = "union", .token = Token{ .KeyUnion = {} } },
@@ -836,7 +836,7 @@ pub const Signature = struct {
 
     pub const Parser = comb.fluent //
         .req("modifier", FunctionModifier) //
-        .req("name", Leaf("Iden")).cut("Expected a function name after `static`/`method`") //
+        .req("name", Leaf("Iden")).cut("Expected a function name after `fn`/`method`") //
         .opt("bang", Leaf("PuncBang")) //
         .req("_", Leaf("PuncRoundOpen")).cut("Expected a `(` to begin the function's parameters") //
         .starSep("parameters", Variable, Leaf("PuncComma")) //
@@ -850,7 +850,7 @@ pub const Signature = struct {
 
 pub const FunctionModifier = union(enum) {
     method: *const Leaf("KeyMethod"),
-    static: *const Leaf("KeyStatic"),
+    function: *const Leaf("KeyFn"),
     pub const Parser = comb.ChoiceParser(@This());
 };
 
