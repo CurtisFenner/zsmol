@@ -9,7 +9,7 @@ const parser = @import("parser.zig");
 
 pub const Blob = parser.Blob;
 pub const Location = parser.Location;
-pub const ParseErrorMessage = parser.ParseErrorMessage;
+pub const ErrorMessage = parser.ErrorMessage;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -294,7 +294,7 @@ const TokenizeResult = struct {
     token: ?Token,
 };
 
-fn parseIntLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ParseErrorMessage) !TokenizeResult {
+fn parseIntLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
     const lowercase = CharacterClass.fromRange('a', 'z');
     const uppercase = CharacterClass.fromRange('A', 'Z');
     const digits = CharacterClass.fromRange('0', '9');
@@ -319,7 +319,7 @@ fn parseIntLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from
     };
 }
 
-fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ParseErrorMessage) !TokenizeResult {
+fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
     // TODO: Avoid multiple allocations by doing two passes.
     var storage = std.ArrayList(u8).init(allocator);
     errdefer storage.deinit();
@@ -328,16 +328,16 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
     var escaped: bool = false;
     while (true) {
         if (from + i == blob.content.len or blob.content[from + i] == '\n') {
-            var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-            entries[0] = ParseErrorMessage.Entry{ .Text = "Unfinished string literal" };
-            entries[1] = ParseErrorMessage.Entry{
+            var entries = try allocator.alloc(ErrorMessage.Entry, 2);
+            entries[0] = ErrorMessage.Entry{ .Text = "Unfinished string literal" };
+            entries[1] = ErrorMessage.Entry{
                 .AtLocation = Location{
                     .blob = blob,
                     .begin = from,
                     .end = from + i,
                 },
             };
-            compile_error.* = ParseErrorMessage{ .entries = entries };
+            compile_error.* = ErrorMessage{ .entries = entries };
             return error.ParseError;
         }
 
@@ -350,16 +350,16 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
             } else if (at == '"') {
                 try storage.append('"');
             } else {
-                var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                entries[0] = ParseErrorMessage.Entry{ .Text = "Invalid escape sequence used" };
-                entries[1] = ParseErrorMessage.Entry{
+                var entries = try allocator.alloc(ErrorMessage.Entry, 2);
+                entries[0] = ErrorMessage.Entry{ .Text = "Invalid escape sequence used" };
+                entries[1] = ErrorMessage.Entry{
                     .AtLocation = Location{
                         .blob = blob,
                         .begin = from + i - 1,
                         .end = from + i + 1,
                     },
                 };
-                compile_error.* = ParseErrorMessage{ .entries = entries };
+                compile_error.* = ErrorMessage{ .entries = entries };
                 return error.ParseError;
             }
             escaped = false;
@@ -375,9 +375,9 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
                 try storage.append(at);
             } else {
                 // TODO: Support UTF-8 encoded literals
-                var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                entries[0] = ParseErrorMessage.Entry{ .Text = "Invalid string literal byte" };
-                entries[1] = ParseErrorMessage.Entry{
+                var entries = try allocator.alloc(ErrorMessage.Entry, 2);
+                entries[0] = ErrorMessage.Entry{ .Text = "Invalid string literal byte" };
+                entries[1] = ErrorMessage.Entry{
                     .AtLocation = Location{
                         .blob = blob,
                         .begin = from + i,
@@ -392,7 +392,7 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
 }
 
 /// When returning a ParseError, writes a message to compile_error.
-fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ParseErrorMessage) !TokenizeResult {
+fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
     assert(from < blob.content.len);
 
     const space_class = CharacterClass.fromList([_]u8{ ' ', '\t', '\n' });
@@ -435,10 +435,10 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
             const comment_end = comment_body_class.match(blob.content[from + 2 ..]);
             return TokenizeResult{ .consumed = 2 + comment_end, .token = null };
         } else if (matching > 2) {
-            var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-            entries[0] = ParseErrorMessage.Entry{ .Text = "Unknown operator" };
-            entries[1] = ParseErrorMessage.Entry{ .AtLocation = Location{ .blob = blob, .begin = from, .end = from + matching } };
-            compile_error.* = ParseErrorMessage{ .entries = entries };
+            var entries = try allocator.alloc(ErrorMessage.Entry, 2);
+            entries[0] = ErrorMessage.Entry{ .Text = "Unknown operator" };
+            entries[1] = ErrorMessage.Entry{ .AtLocation = Location{ .blob = blob, .begin = from, .end = from + matching } };
+            compile_error.* = ErrorMessage{ .entries = entries };
             return error.ParseError;
         }
         const op = blob.content[from .. from + matching];
@@ -451,20 +451,20 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
         return parseStringLiteral(allocator, blob, from, compile_error);
     }
 
-    var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-    entries[0] = ParseErrorMessage.Entry{ .Text = "Unrecognized token" };
-    entries[1] = ParseErrorMessage.Entry{
+    var entries = try allocator.alloc(ErrorMessage.Entry, 2);
+    entries[0] = ErrorMessage.Entry{ .Text = "Unrecognized token" };
+    entries[1] = ErrorMessage.Entry{
         .AtLocation = Location{
             .blob = blob,
             .begin = from,
             .end = from + 1,
         },
     };
-    compile_error.* = ParseErrorMessage{ .entries = entries };
+    compile_error.* = ErrorMessage{ .entries = entries };
     return error.ParseError;
 }
 
-pub fn tokenize(allocator: *std.mem.Allocator, blob: *const parser.Blob, compile_error: *parser.ParseErrorMessage) !comb.Stream {
+pub fn tokenize(allocator: *std.mem.Allocator, blob: *const parser.Blob, compile_error: *parser.ErrorMessage) !comb.Stream {
     var tokens = ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
     var locations = ArrayList(Location).init(allocator);
@@ -502,7 +502,7 @@ test "Tokenize `alpha`" {
         .name = "test",
         .content = "alpha",
     };
-    var compile_error: ParseErrorMessage = undefined;
+    var compile_error: ErrorMessage = undefined;
     const result = try tokenize(std.debug.global_allocator, &blob, &compile_error);
     assert(result.tokens.len == 1);
     assert(result.locations.len == 2);
@@ -518,7 +518,7 @@ test "Tokenize `alpha.beta`" {
         .name = "test",
         .content = "alpha.beta",
     };
-    var compile_error: ParseErrorMessage = undefined;
+    var compile_error: ErrorMessage = undefined;
     const result = try tokenize(std.debug.global_allocator, &blob, &compile_error);
     assert(result.tokens.len == 3);
     assert(result.locations.len == 4);
@@ -543,7 +543,7 @@ test "Tokenize `if`" {
         .name = "test",
         .content = "if",
     };
-    var compile_error: ParseErrorMessage = undefined;
+    var compile_error: ErrorMessage = undefined;
     const result = try tokenize(std.debug.global_allocator, &blob, &compile_error);
     assert(result.tokens.len == 1);
     assert(result.locations.len == 2);
@@ -562,7 +562,7 @@ test "Tokenize `if`" {
 /// Parses the given Blob as a Smol source file.
 /// When this function returns a ParseError, the error is written to the
 /// compile_error parameter.
-pub fn parseSource(allocator: *std.mem.Allocator, blob: Blob, compile_error: *ParseErrorMessage) !Source {
+pub fn parseSource(allocator: *std.mem.Allocator, blob: Blob, compile_error: *ErrorMessage) !Source {
     const stream = try tokenize(allocator, &blob, compile_error);
     const source = try Source.Parser.parse(allocator, stream, compile_error);
     return source;
@@ -649,9 +649,17 @@ pub const ImportOfPackage = struct {
 };
 
 pub const Definition = union(enum) {
-    class_definition: *const ClassDefinition,
-    union_definition: *const UnionDefinition,
-    interface_definition: *const InterfaceDefinition,
+    ClassDefinition: *const ClassDefinition,
+    UnionDefinition: *const UnionDefinition,
+    InterfaceDefinition: *const InterfaceDefinition,
+
+    // pub fn name(self: Definition) Leaf("TypeIden") {
+    //     switch (self) {
+    //         .ClassDefinition => |c| return c.class_name,
+    //         .UnionDefinition => |u| return u.union_name,
+    //         .InterfaceDefinition => |i| return i.interface_name,
+    //     }
+    // }
 
     pub const Parser = comb.ChoiceParser(@This());
 };
@@ -719,13 +727,13 @@ pub const Field = struct {
 };
 
 pub const InterfaceDefinition = struct {
-    i_name: Leaf("TypeIden"),
+    interface_name: Leaf("TypeIden"),
     generics: ?*const Generics,
     members: []const InterfaceMember,
 
     pub const Parser = comb.fluent //
         .req("_", Leaf("KeyInterface")) //
-        .req("i_name", Leaf("TypeIden")).cut("Expected an interface name after `interface`") //
+        .req("interface_name", Leaf("TypeIden")).cut("Expected an interface name after `interface`") //
         .opt("generics", Generics) //
         .req("_", Leaf("PuncCurlyOpen")).cut("Expected a `{` to begin an interface's body") //
         .star("members", InterfaceMember) //
@@ -1234,12 +1242,12 @@ test "Parse simple variable declaration statement" {
         .content = "{ var vv String  = \"xyz\"; }",
     };
 
-    var compile_error: ParseErrorMessage = undefined;
+    var compile_error: ErrorMessage = undefined;
     var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
 
     var block = Block.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
-            try compile_error.render(try std.io.getStdErr());
+            try compile_error.render(try std.io.getStdErr(), "");
             unreachable;
         },
         else => unreachable,
@@ -1258,12 +1266,12 @@ test "Parse simple method" {
         .content = "method concat(a String, b String) String { return a ++ b; }",
     };
 
-    var compile_error: ParseErrorMessage = undefined;
+    var compile_error: ErrorMessage = undefined;
     var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
 
     var fn_def = FunctionDef.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
-            try compile_error.render(try std.io.getStdErr());
+            try compile_error.render(try std.io.getStdErr(), "");
             unreachable;
         },
         else => unreachable,
@@ -1276,12 +1284,12 @@ test "Parse program" {
         .content = "package p; class M {}",
     };
 
-    var compile_error: ParseErrorMessage = undefined;
+    var compile_error: ErrorMessage = undefined;
     var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
 
     var source = Source.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
-            try compile_error.render(try std.io.getStdErr());
+            try compile_error.render(try std.io.getStdErr(), "");
             unreachable;
         },
         else => unreachable,

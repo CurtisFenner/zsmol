@@ -190,8 +190,8 @@ pub const Location = struct {
     }
 };
 
-/// A ParseErrorMessage represents an error message produced when parsing.
-pub const ParseErrorMessage = struct {
+/// A ErrorMessage represents an error message produced when parsing.
+pub const ErrorMessage = struct {
     pub const Entry = union(enum) {
         Text: []const u8,
         AtLocation: Location,
@@ -199,9 +199,9 @@ pub const ParseErrorMessage = struct {
 
     entries: []const Entry,
 
-    pub fn render(e: ParseErrorMessage, file: var, diagnostic_base: ?[]const u8) !void {
+    pub fn render(e: ErrorMessage, file: var, diagnostic_base: ?[]const u8) !void {
         try file.write("ERROR:\n");
-        for (e.entries) |entry| {
+        for (e.entries) |entry, i| {
             switch (entry) {
                 .Text => |t| try file.write(t),
                 .AtLocation => |loc| {
@@ -209,6 +209,7 @@ pub const ParseErrorMessage = struct {
                     try loc.printPosition(file, diagnostic_base);
                     try file.write(":\n");
                     try loc.printExcerpt(file);
+                    if (i + 1 != e.entries.len) try file.write("\n");
                 },
             }
         }
@@ -227,11 +228,11 @@ const InternalParseErrors = error{
     OutOfMemory,
 };
 
-pub fn makeParseError(allocator: *std.mem.Allocator, location: Location, cut_message: []const u8) !ParseErrorMessage {
-    var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-    entries[0] = ParseErrorMessage.Entry{ .Text = cut_message };
-    entries[1] = ParseErrorMessage.Entry{ .AtLocation = location };
-    return ParseErrorMessage{ .entries = entries };
+pub fn makeParseError(allocator: *std.mem.Allocator, location: Location, cut_message: []const u8) !ErrorMessage {
+    var entries = try allocator.alloc(ErrorMessage.Entry, 2);
+    entries[0] = ErrorMessage.Entry{ .Text = cut_message };
+    entries[1] = ErrorMessage.Entry{ .AtLocation = location };
+    return ErrorMessage{ .entries = entries };
 }
 
 pub fn Combinators(comptime Token: type) type {
@@ -417,14 +418,14 @@ pub fn Combinators(comptime Token: type) type {
             return union(enum) {
                 Result: InternalParseResult(T),
                 NoMatch: void,
-                Error: ParseErrorMessage,
+                Error: ErrorMessage,
             };
         }
 
         const FieldResultUnion = union(enum) {
             Success: void,
             Fail: void,
-            Error: ParseErrorMessage,
+            Error: ErrorMessage,
         };
 
         fn InternalParseResult(comptime T: type) type {
@@ -516,17 +517,17 @@ pub fn Combinators(comptime Token: type) type {
             }
 
             return struct {
-                pub fn parse(allocator: *std.mem.Allocator, stream: Stream, parse_error: *ParseErrorMessage) error{
+                pub fn parse(allocator: *std.mem.Allocator, stream: Stream, parse_error: *ErrorMessage) error{
                     OutOfMemory,
                     ParseError,
                 }!Into {
                     const ru = try @This()._parse(allocator, stream, 0);
                     switch (ru) {
                         .NoMatch => {
-                            var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                            entries[0] = ParseErrorMessage.Entry{ .Text = "Expected " ++ @typeName(Into) };
-                            entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[0] };
-                            parse_error.* = ParseErrorMessage{ .entries = entries };
+                            var entries = try allocator.alloc(ErrorMessage.Entry, 2);
+                            entries[0] = ErrorMessage.Entry{ .Text = "Expected " ++ @typeName(Into) };
+                            entries[1] = ErrorMessage.Entry{ .AtLocation = stream.locations[0] };
+                            parse_error.* = ErrorMessage{ .entries = entries };
                             return error.ParseError;
                         },
                         .Error => |e| {
@@ -535,10 +536,10 @@ pub fn Combinators(comptime Token: type) type {
                         },
                         .Result => |result| {
                             if (result.consumed != stream.tokens.len) {
-                                var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                                entries[0] = ParseErrorMessage.Entry{ .Text = "Unexpected end to " ++ @typeName(Into) };
-                                entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[result.consumed] };
-                                parse_error.* = ParseErrorMessage{ .entries = entries };
+                                var entries = try allocator.alloc(ErrorMessage.Entry, 2);
+                                entries[0] = ErrorMessage.Entry{ .Text = "Unexpected end to " ++ @typeName(Into) };
+                                entries[1] = ErrorMessage.Entry{ .AtLocation = stream.locations[result.consumed] };
+                                parse_error.* = ErrorMessage{ .entries = entries };
                                 return error.ParseError;
                             }
                             return result.value;
@@ -593,10 +594,10 @@ pub fn Combinators(comptime Token: type) type {
                     var enough = list.count() >= field.min_take_count;
                     if (!enough) {
                         if (field.cut_message) |cut_message| {
-                            var entries = try allocator.alloc(ParseErrorMessage.Entry, 2);
-                            entries[0] = ParseErrorMessage.Entry{ .Text = cut_message };
-                            entries[1] = ParseErrorMessage.Entry{ .AtLocation = stream.locations[from + consumed.*] };
-                            return FieldResultUnion{ .Error = ParseErrorMessage{ .entries = entries } };
+                            var entries = try allocator.alloc(ErrorMessage.Entry, 2);
+                            entries[0] = ErrorMessage.Entry{ .Text = cut_message };
+                            entries[1] = ErrorMessage.Entry{ .AtLocation = stream.locations[from + consumed.*] };
+                            return FieldResultUnion{ .Error = ErrorMessage{ .entries = entries } };
                         }
                         return FieldResultUnion{ .Fail = {} };
                     }
@@ -769,12 +770,12 @@ test "Lisp" {
     const blob = Blob{ .name = "test", .content = "(a (b c d) (e f) () g)" };
     const stream = try Lexer.tokenize(allocator, &blob);
 
-    var parse_error: ParseErrorMessage = undefined;
+    var parse_error: ErrorMessage = undefined;
 
     const stdout_file = try std.io.getStdOut();
     const result = AST.Phrase.Parser.parse(allocator, stream, &parse_error) catch |err| switch (err) {
         error.ParseError => |e| {
-            try parse_error.render(stdout_file);
+            try parse_error.render(stdout_file, "");
             return e;
         },
         error.OutOfMemory => |e| return e,

@@ -83,22 +83,28 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
     var sources = std.ArrayList(grammar.Source).init(allocator);
     defer sources.deinit();
     const stderr_file = try std.io.getStdErr();
-    var parse_error: grammar.ParseErrorMessage = undefined;
+    var error_message: grammar.ErrorMessage = undefined;
 
     // Parse the source files.
     for (args.plain) |arg| {
         const blob = try blobFromFile(allocator, arg);
-        const source = grammar.parseSource(allocator, blob, &parse_error) catch |err| switch (err) {
+        const source = grammar.parseSource(allocator, blob, &error_message) catch |err| switch (err) {
             error.OutOfMemory => return err,
             error.ParseError => {
-                try parse_error.render(stderr_file, args.find("diagnostic-base"));
+                try error_message.render(stderr_file, args.find("diagnostic-base"));
                 return 40;
             },
         };
         try sources.append(source);
     }
 
-    const program = try semantics.semantics(allocator, sources.toOwnedSlice());
+    const program = semantics.semantics(allocator, sources.toOwnedSlice(), &error_message) catch |err| switch (err) {
+        error.CompileError => {
+            try error_message.render(stderr_file, args.find("diagnostic-base"));
+            return 40;
+        },
+        else => return err,
+    };
 
     // TODO: Interpet.
     return 1;
