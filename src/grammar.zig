@@ -294,6 +294,26 @@ const TokenizeResult = struct {
     token: ?Token,
 };
 
+const lowercase_class = CharacterClass.fromRange('a', 'z');
+const uppercase_class = CharacterClass.fromRange('A', 'Z');
+const digit_class = CharacterClass.fromRange('0', '9');
+const identifier_class = lowercase_class.sum(uppercase_class).sum(digit_class);
+
+fn parseTypeVariable(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
+    const stop = identifier_class.match(blob.content[from + 1 ..]);
+    const name = blob.content[from + 1 .. from + 1 + stop];
+    if (stop == 0 or !uppercase_class.contains(name[0])) {
+        const location = Location{ .blob = blob, .begin = from, .end = from + 1 };
+        compile_error.* = try parser.makeParseError(allocator, location, "Malformed type variable");
+    }
+
+    const token = if (std.mem.eql(u8, "Self", name)) Token{ .TypeSelf = {} } else Token{ .TypeVar = name };
+    return TokenizeResult{
+        .consumed = stop + 1,
+        .token = token,
+    };
+}
+
 fn parseIntLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
     const lowercase = CharacterClass.fromRange('a', 'z');
     const uppercase = CharacterClass.fromRange('A', 'Z');
@@ -396,10 +416,6 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
     assert(from < blob.content.len);
 
     const space_class = CharacterClass.fromList([_]u8{ ' ', '\t', '\n' });
-    const lowercase_class = CharacterClass.fromRange('a', 'z');
-    const uppercase_class = CharacterClass.fromRange('A', 'Z');
-    const digit_class = CharacterClass.fromRange('0', '9');
-    const identifier_class = lowercase_class.sum(uppercase_class).sum(digit_class);
     const operator_class = CharacterClass.fromList([_]u8{ '=', '<', '+', '-', '*', '/', '%' });
     const comment_body_class = CharacterClass.fromRange(32, 127);
 
@@ -447,6 +463,8 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
         }
     } else if ('0' <= at and at <= '9') {
         return parseIntLiteral(allocator, blob, from, compile_error);
+    } else if ('#' == at) {
+        return parseTypeVariable(allocator, blob, from, compile_error);
     } else if (at == '"') {
         return parseStringLiteral(allocator, blob, from, compile_error);
     }
@@ -562,8 +580,8 @@ test "Tokenize `if`" {
 /// Parses the given Blob as a Smol source file.
 /// When this function returns a ParseError, the error is written to the
 /// compile_error parameter.
-pub fn parseSource(allocator: *std.mem.Allocator, blob: Blob, compile_error: *ErrorMessage) !Source {
-    const stream = try tokenize(allocator, &blob, compile_error);
+pub fn parseSource(allocator: *std.mem.Allocator, blob: *const Blob, compile_error: *ErrorMessage) !Source {
+    const stream = try tokenize(allocator, blob, compile_error);
     const source = try Source.Parser.parse(allocator, stream, compile_error);
     return source;
 }

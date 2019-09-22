@@ -7,7 +7,7 @@ const interpreter = @import("interpreter.zig");
 const grammar = @import("grammar.zig");
 const semantics = @import("semantics.zig");
 
-fn blobFromFile(allocator: *std.mem.Allocator, file_name: []const u8) !grammar.Blob {
+fn blobFromFile(allocator: *std.mem.Allocator, file_name: []const u8) !*grammar.Blob {
     const source_file = try std.fs.File.openRead(file_name);
     defer source_file.close();
 
@@ -31,10 +31,10 @@ fn blobFromFile(allocator: *std.mem.Allocator, file_name: []const u8) !grammar.B
         var len = to - block_size * i;
         std.mem.copy(u8, content[block_size * i .. to], block[0..len]);
     }
-    return grammar.Blob{
-        .name = file_name,
-        .content = content,
-    };
+    const out = try allocator.create(grammar.Blob);
+    out.name = file_name;
+    out.content = content;
+    return out;
 }
 
 const CommandArgs = struct {
