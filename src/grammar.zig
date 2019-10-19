@@ -640,8 +640,8 @@ pub const Import = struct {
 };
 
 pub const ImportChoice = union(enum) {
-    of_object: *const ImportOfObject,
-    of_package: *const ImportOfPackage,
+    OfObject: *const ImportOfObject,
+    OfPackage: *const ImportOfPackage,
 
     pub const Parser = comb.ChoiceParser(@This());
 };
