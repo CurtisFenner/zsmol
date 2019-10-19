@@ -648,7 +648,7 @@ pub fn Combinators(comptime Token: type) type {
                     }
 
                     // Produce the finished result, including Location annotations.
-                    result.location = stream.locations[from].span(stream.locations[from + consumed]);
+                    result.location = stream.locations[from].span(stream.locations[from + consumed - 1]);
                     return InternalParseUnion(Into){
                         .Result = InternalParseResult(Into){
                             .consumed = consumed,
