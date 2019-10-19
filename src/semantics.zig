@@ -208,10 +208,6 @@ const SourceContext = struct {
         // TODO: Iterate over package contexts, bringing object names into scope.
 
         var imported_packages = STrie(PackageImport).init(allocator);
-        try imported_packages.put(package_name, PackageImport{
-            .package = package,
-            .location = package_definition.location,
-        });
 
         return SourceContext{
             .program_context = program_context,
@@ -228,6 +224,15 @@ const SourceContext = struct {
 
     fn importPackage(self: *SourceContext, import: *const grammar.ImportOfPackage) !void {
         const leaf = import.package_name;
+        if (std.mem.eql(u8, leaf.value, self.package.name)) {
+            self.program_context.error_message.* = (try ErrorBuilder.init(self.program_context.allocator)) //
+                .text("The package `").text(self.package.name).text("` cannot import itself.\n") //
+                .text("However, it's imported") //
+                .at(import.location) //
+                .build();
+            return error.CompileError;
+        }
+
         var package = try self.program_context.lookupPackage(leaf.value, leaf.location);
         if (self.imported_packages.get(leaf.value)) |present| {
             // Already exists.

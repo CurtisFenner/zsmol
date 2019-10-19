@@ -1,0 +1,7 @@
+ERROR:
+The package `testing` cannot import itself.
+However, it's imported at test.smol:3:8-3:15:
+         2 | 
+         3 | import testing;
+           |        ^^^^^^^
+         4 | 
