@@ -59,6 +59,7 @@ local function shell(command)
 		-- Lua 5.2 returns true|nil, reason, status
 		return false, code
 	end
+
 	-- Lua 5.1 returns just the status code
 	return status == 0, status
 end
@@ -69,6 +70,7 @@ end
 
 local function shell_ls(directory)
 	local contents = {}
+
 	-- TODO: make this more portable and robust
 	for line in io.popen("ls " .. directory, "r"):lines() do
 		table.insert(contents, line)
@@ -80,7 +82,7 @@ end
 local function ls(directory, ext)
 	local paths = {}
 	for _, element in ipairs(shell_ls(directory)) do
-		if not ext or element:sub(-(1 + #ext)) == "." .. ext then
+		if not ext or element:sub(- (1 + #ext)) == "." .. ext then
 			table.insert(paths, path {directory, element})
 		end
 	end
@@ -107,7 +109,7 @@ local function printHeader(text, symbol, align)
 		error "unknown alignment"
 	end
 
-	assert(left + #middle + right == 80 or #middle+4 >= 80)
+	assert(left + #middle + right == 80 or #middle + 4 >= 80)
 	print("")
 	print(symbol:rep(left) .. middle .. symbol:rep(right))
 	print("")
@@ -115,15 +117,21 @@ end
 
 -- Converts tabs to 4 spaces in a string that doesn't contain newlines
 local function spaces(s)
-	assert(not s:find("\n"))
+	assert(not s:find("\r"))
 	local out = ""
+	local col = 0
 	for i = 1, #s do
-		if s:sub(i, i) ~= "\t" then
-			out = out .. s:sub(i, i)
-		else
+		if s:sub(i, i) == "\t" then
 			repeat
 				out = out .. " "
-			until #out % 4 == 0
+				col = col + 1
+			until col % 4 == 0
+		elseif s:sub(i, i) == "\n" then
+			col = 0
+			out = out .. "\n"
+		else
+			out = out .. s:sub(i, i)
+			col = col + 1
 		end
 	end
 	return out
@@ -131,7 +139,7 @@ end
 
 local function printBox(lines)
 	local WIDTH = 80
-	local bar = "+" .. string.rep("-", WIDTH-2) .. "+"
+	local bar = "+" .. string.rep("-", WIDTH - 2) .. "+"
 	local out = {bar}
 	for _, line in ipairs(lines) do
 		local row = spaces("|\t" .. line)
@@ -153,12 +161,27 @@ for _, group in ipairs(ls "tests\\negative") do
 			id = "-" .. test,
 			run = function()
 				local sources = ls(test, "smol")
-				local cmd = "\"\"./built/main\"\" interpet " .. table.concat(sources, " ") .. " --diagnostic-base " .. test  .. "\\ > " .. path {test, "err.actual"} .. " 2>&1"
+				local cmd = "\"\"./built/main\"\" interpet " .. table.concat(
+					sources,
+					" "
+				) .. " --diagnostic-base " .. test .. "\\ > " .. path {
+					test,
+					"err.actual"
+				} .. " 2>&1"
 				local _, code = shell(cmd)
 				if code ~= 40 then
-					return "fail", string.format("Expected code `40` but got `%d`.", code)
+					local output = {}
+					for line in io.lines(path {test, "err.actual"}) do
+						table.insert(output, line)
+					end
+					local firstTwo = table.concat({output[1], output[2]}, "\n")
+					return "fail", string.format(
+						"Expected code `40` but got `%d`.\n%s",
+						code,
+						firstTwo
+					)
 				end
-				local _, code = shell("diff " .. path {test, "err.expected"} .. " " .. path{test, "err.actual"})
+				local _, code = shell("diff " .. path {test, "err.expected"} .. " " .. path {test, "err.actual"})
 				if code ~= 0 then
 					return "fail", string.format("Wrong output.")
 				end
@@ -220,7 +243,7 @@ end
 local query = arg[1]
 
 for _, test in ipairs(tests) do
-	local matches = not query or test.id:find(query, 1, false)
+	local matches = not query or test.id:find(query, 1, true)
 	if matches then
 		local result, message = test.run()
 		assert(result == "fail" or result == "pass")
@@ -238,7 +261,6 @@ for _, test in ipairs(tests) do
 		end
 	end
 end
-
 
 -- (3) Report
 REPORT()
