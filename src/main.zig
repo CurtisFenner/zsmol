@@ -7,6 +7,8 @@ const interpreter = @import("interpreter.zig");
 const grammar = @import("grammar.zig");
 const semantics = @import("semantics.zig");
 
+const std_core_file = @embedFile("standard/core.smol");
+
 fn blobFromFile(allocator: *std.mem.Allocator, file_name: []const u8) !*grammar.Blob {
     const source_file = try std.fs.File.openRead(file_name);
     defer source_file.close();
@@ -84,6 +86,19 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
     defer sources.deinit();
     const stderr_file = try std.io.getStdErr();
     var error_message: grammar.ErrorMessage = undefined;
+
+    // Parse the standard library.
+    const core_blob = try allocator.create(grammar.Blob);
+    core_blob.name = "<core>";
+    core_blob.content = std_core_file[0..];
+    const core_source = grammar.parseSource(allocator, core_blob, &error_message) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.ParseError => {
+            try error_message.render(stderr_file, args.find("diagnostic-base"));
+            return 40;
+        },
+    };
+    try sources.append(core_source);
 
     // Parse the source files.
     for (args.plain) |arg| {
