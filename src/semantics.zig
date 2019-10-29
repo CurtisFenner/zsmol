@@ -112,16 +112,27 @@ const ProgramContext = struct {
             });
         }
 
+        fn lookupObject(self: *Package, name: grammar.Leaf("TypeIden")) !Definition {
+            if (self.definitions.get(name.value)) |definition| {
+                return definition.*;
+            }
+            self.program_context.error_message.* = (try ErrorBuilder.init(self.program_context.allocator)) //
+                .text("There is no object called `").text(self.name).text(":").text(name.value).text("` defined anywhere.") //
+                .text("\nHowever, it's referenced").at(name.location) //
+                .build();
+            return error.CompileError;
+        }
+
         fn defineClass(self: *Package, name: grammar.Leaf("TypeIden")) !void {
             try self.defineObject(name, ObjectID{ .Class = self.program_context.vendClassId() });
         }
 
         fn defineUnion(self: *Package, name: grammar.Leaf("TypeIden")) !void {
-            try self.defineObject(name, ObjectID{ .Class = self.program_context.vendUnionId() });
+            try self.defineObject(name, ObjectID{ .Union = self.program_context.vendUnionId() });
         }
 
         fn defineInterface(self: *Package, name: grammar.Leaf("TypeIden")) !void {
-            try self.defineObject(name, ObjectID{ .Class = self.program_context.vendInterfaceId() });
+            try self.defineObject(name, ObjectID{ .Interface = self.program_context.vendInterfaceId() });
         }
     };
 
@@ -219,6 +230,8 @@ const SourceContext = struct {
     }
 
     fn importObject(self: *SourceContext, import: *const grammar.ImportOfObject) !void {
+        const package = try self.program_context.lookupPackage(import.package_name.value, import.package_name.location);
+        const definition = try package.lookupObject(import.object_name);
         return error.Unimplemented;
     }
 
