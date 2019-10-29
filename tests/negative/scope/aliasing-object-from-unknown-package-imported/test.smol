@@ -1,0 +1,6 @@
+package testing;
+
+class Test {
+	fn main() Unit {
+	}
+}

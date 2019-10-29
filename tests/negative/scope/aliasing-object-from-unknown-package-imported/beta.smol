@@ -1,0 +1,5 @@
+package beta;
+
+import gamma:Foo;
+
+interface Foo {}
