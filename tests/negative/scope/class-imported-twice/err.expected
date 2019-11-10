@@ -1,0 +1,12 @@
+ERROR:
+The name `Foo` has already been bound at test.smol:3:14-3:17:
+         2 | 
+         3 | import alpha:Foo;
+           |              ^^^
+         4 | import alpha:Foo;
+
+However, it's imported again at test.smol:4:8-4:17:
+         3 | import alpha:Foo;
+         4 | import alpha:Foo;
+           |        ^^^^^^^^^
+         5 | 

@@ -1,0 +1,9 @@
+package testing;
+
+import alpha:Foo;
+import alpha:Foo;
+
+class Test {
+	fn main() Unit {
+	}
+}

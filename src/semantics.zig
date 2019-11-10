@@ -198,7 +198,7 @@ const SourceContext = struct {
 
     const ObjectBinding = struct {
         object: ObjectID,
-        location: Location,
+        binding_location: Location,
         sort: enum {
             Import,
             Definition,
@@ -232,7 +232,22 @@ const SourceContext = struct {
     fn importObject(self: *SourceContext, import: *const grammar.ImportOfObject) !void {
         const package = try self.program_context.lookupPackage(import.package_name.value, import.package_name.location);
         const definition = try package.lookupObject(import.object_name);
-        return error.Unimplemented;
+        if (self.object_map.get(import.object_name.value)) |preexisting| {
+            // This name is already defined.
+            self.program_context.error_message.* = (try ErrorBuilder.init(self.program_context.allocator)) //
+                .text("The name `").text(import.object_name.value).text("` has already been bound") //
+                .at(preexisting.binding_location) //
+                .text("However, it's imported again") //
+                .at(import.location) //
+                .build();
+            return error.CompileError;
+        }
+
+        try self.object_map.put(import.object_name.value, ObjectBinding{
+            .object = definition.object,
+            .binding_location = import.object_name.location,
+            .sort = .Import,
+        });
     }
 
     fn importPackage(self: *SourceContext, import: *const grammar.ImportOfPackage) !void {
