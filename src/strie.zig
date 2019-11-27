@@ -6,6 +6,7 @@ const assert = std.debug.assert;
 
 const LinkAllocator = @import("linkalloc.zig").LinkAllocator;
 
+/// A trie data structure.
 pub fn STrie(comptime Value: type) type {
     return struct {
         const Self = @This();
@@ -17,6 +18,7 @@ pub fn STrie(comptime Value: type) type {
         leafs: [16]?Value,
         branches: [16]?*Wrap,
 
+        /// Creates an empty trie.
         pub fn init(allocator: *std.mem.Allocator) Self {
             return Self{
                 .allocator = allocator,
@@ -25,6 +27,7 @@ pub fn STrie(comptime Value: type) type {
             };
         }
 
+        /// Frees all of the internal memory owned by this trie.
         pub fn deinit(self: *Self) void {
             for (self.branches) |b| {
                 if (b) |branch| {
@@ -34,6 +37,7 @@ pub fn STrie(comptime Value: type) type {
             }
         }
 
+        /// Puts a value into the trie, replacing any value that was present.
         pub fn put(self: *Self, key: []const u8, value: Value) error{OutOfMemory}!void {
             assert(key.len != 0);
             const i = key[0];
@@ -57,6 +61,7 @@ pub fn STrie(comptime Value: type) type {
             }
         }
 
+        /// Gets the most recently put value associated with the key.
         pub fn get(self: *Self, key: []const u8) ?*Value {
             assert(key.len != 0);
             const i = key[0];

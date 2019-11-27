@@ -10,8 +10,8 @@ const TypeId = @import("builtin").TypeId;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-/// A Blob represents an in-memory representation of a source.
-/// This is used for generating error messages that include context.
+/// A Blob represents an in-memory representation of a source file. It contains
+/// the whole contents of the file to make generating excerpts easy.
 pub const Blob = struct {
     name: []const u8,
     content: []const u8,
@@ -36,6 +36,9 @@ pub const Location = struct {
     const LINE_CONTEXT: usize = 1;
     const TAB_SIZE: usize = 4;
 
+    /// Prints this location as a phase in the format
+    /// `"filename:startline:startcol-endline:endcol"` to the given file.
+    /// For example, `"dir/file.txt:10:15-10:20"`.
     pub fn printPosition(location: Location, file: var, diagnostic_base: ?[]const u8) !void {
         var start_line: usize = undefined;
         var start_column: usize = undefined;
@@ -216,18 +219,6 @@ pub const ErrorMessage = struct {
     }
 };
 
-const ParseErrors = error{
-    ParseError,
-    OutOfMemory,
-};
-
-/// Internal parse errors.
-const InternalParseErrors = error{
-    NoMatch,
-    ParseError,
-    OutOfMemory,
-};
-
 pub fn makeParseError(allocator: *std.mem.Allocator, location: Location, cut_message: []const u8) !ErrorMessage {
     var entries = try allocator.alloc(ErrorMessage.Entry, 2);
     entries[0] = ErrorMessage.Entry{ .Text = cut_message };
@@ -286,6 +277,7 @@ pub fn Combinators(comptime Token: type) type {
                 return []const self.CT;
             }
         };
+
         const grammar = @This();
 
         /// Fluent provides a "fluent interface" for building AST types out of
@@ -374,6 +366,9 @@ pub fn Combinators(comptime Token: type) type {
                 };
             }
 
+            /// Parse 0 or more entries of the same type, each separated by the
+            /// given separator AST. The separators are dropped from the
+            /// resulting value.
             fn starSep(comptime self: Fluent, comptime name: []const u8, comptime CT: type, comptime comma: type) Fluent {
                 return Fluent{
                     .fields = self.fields ++ [_]Field{Field{
@@ -435,6 +430,7 @@ pub fn Combinators(comptime Token: type) type {
             };
         }
 
+        /// A parser that matches only the end of a Stream.
         pub const EofParser = struct {
             nothing: usize,
             pub const Parser = struct {
@@ -451,6 +447,7 @@ pub fn Combinators(comptime Token: type) type {
             };
         };
 
+        /// A parser that matches a single token of the given type.
         pub fn TokenParser(comptime Into: type, comptime pattern: @TagType(Token)) type {
             return struct {
                 pub fn deinit(allocator: *std.mem.Allocator, self: Into) void {}

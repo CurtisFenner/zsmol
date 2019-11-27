@@ -557,36 +557,19 @@ test "simple" {
     var la = LinkAllocator.init(buffer[0..]);
     var allocator = &la.allocator;
 
-    // la.describe();
-
     var obj1 = try allocator.alloc(usize, 2);
     obj1[0] = 111;
     obj1[1] = 222;
-
-    // la.describe();
 
     var obj2 = try allocator.alloc(usize, 3);
     obj2[0] = 333;
     obj2[1] = 444;
     obj2[2] = 555;
 
-    // la.describe();
-
     var obj3 = try allocator.alloc(usize, 1);
     obj3[0] = 666;
-
-    // la.describe();
-
     allocator.free(obj2);
-
-    // la.describe();
-
     allocator.free(obj3);
-
-    // la.describe();
-
     allocator.free(obj1);
-
-    // la.describe();
     assert(la.isEmpty());
 }
