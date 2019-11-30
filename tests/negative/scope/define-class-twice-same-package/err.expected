@@ -1,0 +1,10 @@
+ERROR:
+The object `testing:Alpha` is defined for a second time at test2.smol:3:7-3:12:
+         2 | 
+         3 | class Alpha {}
+           |       ^^^^^
+
+The first definition was at test.smol:4:7-4:12:
+         3 | class Test {}
+         4 | class Alpha {}
+           |       ^^^^^

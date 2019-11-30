@@ -1,0 +1,11 @@
+ERROR:
+The name `C` has already been bound at test.smol:2:14-2:15:
+         1 | package testing;
+         2 | import alpha:C;
+           |              ^
+         3 | import alpha:C;
+
+However, it's imported again at test.smol:3:14-3:15:
+         2 | import alpha:C;
+         3 | import alpha:C;
+           |              ^
