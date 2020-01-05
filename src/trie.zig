@@ -21,6 +21,31 @@ pub fn NibbleTrie(comptime Value: type) type {
 
         blocks: std.ArrayList(Block),
 
+        const ValueIterator = struct {
+            trie: *Self,
+            index: usize,
+
+            pub fn next(self: *ValueIterator) ?Value {
+                while (true) {
+                    if (self.index >= self.trie.blocks.count()) {
+                        return null;
+                    }
+                    const at = self.index;
+                    self.index += 1;
+                    if (self.trie.blocks.toSlice()[at].value) |v| {
+                        return v;
+                    }
+                }
+            }
+        };
+
+        pub fn values(self: *Self) ValueIterator {
+            return ValueIterator{
+                .trie = self,
+                .index = 0,
+            };
+        }
+
         /// Creates an empty trie.
         pub fn init(allocator: *std.mem.Allocator) Self {
             return Self{
@@ -158,4 +183,10 @@ test "NibbleTrie simple" {
     assert(trie.get("ab").?.* == 6);
     assert(trie.get("abc").?.* == 7);
     assert(trie.get("abcd") == null);
+
+    var it = trie.nibble_trie.values();
+    assert(it.next().? == 6);
+    assert(it.next().? == 7);
+    assert(it.next().? == 5);
+    assert(it.next() == null);
 }
