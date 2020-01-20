@@ -4,12 +4,15 @@
 const std = @import("std");
 
 const LinkAllocator = @import("linkalloc.zig").LinkAllocator;
-const STrie = @import("strie.zig").STrie;
+const StringTrie = @import("trie.zig").StringTrie;
 
 const grammar = @import("grammar.zig");
 const ir = @import("ir.zig");
 const Location = grammar.Location;
 const ErrorMessage = grammar.ErrorMessage;
+const Identifier = @import("identifiers.zig").Identifier;
+const IdentifierPool = @import("identifiers.zig").IdentifierPool;
+const IdentifierMap = @import("identifiers.zig").IdentifierMap;
 
 const ObjectID = union(enum) {
     Class: usize,
@@ -55,8 +58,11 @@ const ErrorBuilder = struct {
 const ProgramContext = struct {
     allocator: *std.mem.Allocator,
 
+    /// A pool of Identifiers used in this program.
+    identifier_pool: *IdentifierPool,
+
     /// The set of packages names that have been defined.
-    package_set: STrie(usize),
+    package_set: IdentifierMap(usize),
 
     // TODO: These will become lists containing the actual metadata (fields, arity, etc)
     next_class_id: usize,
@@ -90,15 +96,16 @@ const ProgramContext = struct {
         return id;
     }
 
+    /// Represents a package (which may be shared between multiple SourceContexts).
     const Package = struct {
         program_context: *ProgramContext,
-        name: []const u8,
-        definitions: STrie(Definition),
+        name: Identifier,
+        definitions: IdentifierMap(Definition),
 
         fn defineObject(self: *Package, name: grammar.Leaf("TypeIden"), object: ObjectID) !void {
             if (self.definitions.get(name.value)) |previous| {
                 self.program_context.error_message.* = (try ErrorBuilder.init(self.program_context.allocator)) //
-                    .text("The object `").text(self.name).text(":").text(name.value).text("` is defined for a second time") //
+                    .text("The object `").text(self.name.string()).text(":").text(name.value.string()).text("` is defined for a second time") //
                     .at(name.location) //
                     .text("The first definition was") //
                     .at(previous.location) //
@@ -117,29 +124,38 @@ const ProgramContext = struct {
                 return definition.*;
             }
             self.program_context.error_message.* = (try ErrorBuilder.init(self.program_context.allocator)) //
-                .text("There is no object called `").text(self.name).text(":").text(name.value).text("` defined anywhere.") //
+                .text("There is no object called `") //
+                .text(self.name.string()).text(":").text(name.value.string()) //
+                .text("` defined anywhere.") //
                 .text("\nHowever, it's referenced").at(name.location) //
                 .build();
             return error.CompileError;
         }
 
-        fn defineClass(self: *Package, name: grammar.Leaf("TypeIden")) !void {
-            try self.defineObject(name, ObjectID{ .Class = self.program_context.vendClassId() });
+        fn defineClass(self: *Package, name: grammar.Leaf("TypeIden"), source: *SourceContext) !void {
+            const id = ObjectID{ .Class = self.program_context.vendClassId() };
+            try source.definitions.append(id);
+            try self.defineObject(name, id);
         }
 
-        fn defineUnion(self: *Package, name: grammar.Leaf("TypeIden")) !void {
-            try self.defineObject(name, ObjectID{ .Union = self.program_context.vendUnionId() });
+        fn defineUnion(self: *Package, name: grammar.Leaf("TypeIden"), source: *SourceContext) !void {
+            const id = ObjectID{ .Union = self.program_context.vendUnionId() };
+            try source.definitions.append(id);
+            try self.defineObject(name, id);
         }
 
-        fn defineInterface(self: *Package, name: grammar.Leaf("TypeIden")) !void {
-            try self.defineObject(name, ObjectID{ .Interface = self.program_context.vendInterfaceId() });
+        fn defineInterface(self: *Package, name: grammar.Leaf("TypeIden"), source: *SourceContext) !void {
+            const id = ObjectID{ .Interface = self.program_context.vendInterfaceId() };
+            try source.definitions.append(id);
+            try self.defineObject(name, id);
         }
     };
 
-    fn init(allocator: *std.mem.Allocator, error_message: *ErrorMessage) ProgramContext {
+    fn init(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, error_message: *ErrorMessage) ProgramContext {
         return ProgramContext{
             .allocator = allocator,
-            .package_set = STrie(usize).init(allocator),
+            .identifier_pool = identifier_pool,
+            .package_set = IdentifierMap(usize).init(allocator, identifier_pool),
             .packages = std.ArrayList(Package).init(allocator),
             .error_message = error_message,
             .next_class_id = 0,
@@ -150,14 +166,14 @@ const ProgramContext = struct {
 
     /// Returns a package with the name.
     /// Throws an error if no such package has been defined.
-    fn lookupPackage(self: *ProgramContext, name: []const u8, lookup_location: Location) !*Package {
+    fn lookupPackage(self: *ProgramContext, name: Identifier, lookup_location: Location) !*Package {
         if (self.package_set.get(name)) |package_index| {
             return &self.packages.toSlice()[package_index.*];
         }
 
         self.error_message.* = (try ErrorBuilder.init(self.allocator)) //
             .text("There is no package named `") //
-            .text(name) //
+            .text(name.string()) //
             .text("`, but it's referenced") //
             .at(lookup_location) //
             .build();
@@ -166,15 +182,17 @@ const ProgramContext = struct {
 
     /// Defines a package. A package may be safely defined multipled times,
     /// since multiple source files can share a package.
-    fn definePackage(self: *ProgramContext, name: []const u8) !*Package {
-        if (self.package_set.get(name)) |package_index| {
+    fn definePackage(self: *ProgramContext, name: Identifier) !*Package {
+        const p: *IdentifierMap(usize) = &self.package_set;
+        const r: ?*usize = p.get(name);
+        if (r) |package_index| {
             return &self.packages.toSlice()[package_index.*];
         }
         const index = self.packages.count();
         try self.packages.append(Package{
             .name = name,
             .program_context = self,
-            .definitions = STrie(Definition).init(self.allocator),
+            .definitions = IdentifierMap(Definition).init(self.allocator, self.identifier_pool),
         });
         errdefer _ = self.packages.pop();
         try self.package_set.put(name, index);
@@ -187,12 +205,15 @@ const SourceContext = struct {
     /// The context for the program this source file is a part of.
     program_context: *ProgramContext,
 
+    /// The objects defined by this source context.
+    definitions: std.ArrayList(ObjectID),
+
     /// The set of package names that are in-scope for this source.
     const PackageImport = struct {
         package: *ProgramContext.Package,
         location: Location,
     };
-    imported_packages: STrie(PackageImport),
+    imported_packages: IdentifierMap(PackageImport),
 
     package: *ProgramContext.Package,
 
@@ -206,7 +227,7 @@ const SourceContext = struct {
     };
 
     /// The set of object names that are in-scope for this source.
-    object_map: STrie(ObjectBinding),
+    object_map: IdentifierMap(ObjectBinding),
 
     /// Create an empty context.
     fn init(program_context: *ProgramContext, package_definition: grammar.PackageDef) !SourceContext {
@@ -214,13 +235,14 @@ const SourceContext = struct {
         const package_name = package_definition.package_name.value;
 
         // Initialize the object map with the objects defined in the given package.
-        var object_map = STrie(ObjectBinding).init(allocator);
+        var object_map = IdentifierMap(ObjectBinding).init(allocator, program_context.identifier_pool);
         var package = try program_context.definePackage(package_name);
         // TODO: Iterate over package contexts, bringing object names into scope.
 
-        var imported_packages = STrie(PackageImport).init(allocator);
+        var imported_packages = IdentifierMap(PackageImport).init(allocator, program_context.identifier_pool);
 
         return SourceContext{
+            .definitions = std.ArrayList(ObjectID).init(allocator),
             .program_context = program_context,
             .package = package,
             // TODO: Why does this compile with `STrie(void)`?
@@ -229,16 +251,22 @@ const SourceContext = struct {
         };
     }
 
+    fn introduceObject(self: *SourceContext, definition: ProgramContext.Definition) !void {
+        return error.TODO;
+    }
+
     fn importObject(self: *SourceContext, import: *const grammar.ImportOfObject) !void {
         const package = try self.program_context.lookupPackage(import.package_name.value, import.package_name.location);
         const definition = try package.lookupObject(import.object_name);
         if (self.object_map.get(import.object_name.value)) |preexisting| {
             // This name is already defined.
             self.program_context.error_message.* = (try ErrorBuilder.init(self.program_context.allocator)) //
-                .text("The name `").text(import.object_name.value).text("` has already been bound") //
+                .text("The name `") //
+                .text(import.object_name.value.string()) //
+                .text("` has already been bound") //
                 .at(preexisting.binding_location) //
                 .text("However, it's imported again") //
-                .at(import.location) //
+                .at(import.object_name.location) //
                 .build();
             return error.CompileError;
         }
@@ -252,9 +280,11 @@ const SourceContext = struct {
 
     fn importPackage(self: *SourceContext, import: *const grammar.ImportOfPackage) !void {
         const leaf = import.package_name;
-        if (std.mem.eql(u8, leaf.value, self.package.name)) {
+        if (leaf.value.eq(self.package.name)) {
             self.program_context.error_message.* = (try ErrorBuilder.init(self.program_context.allocator)) //
-                .text("The package `").text(self.package.name).text("` cannot import itself.\n") //
+                .text("The package `") //
+                .text(self.package.name.string()) //
+                .text("` cannot import itself.\n") //
                 .text("However, it's imported") //
                 .at(import.location) //
                 .build();
@@ -266,7 +296,7 @@ const SourceContext = struct {
             // Already exists.
             self.program_context.error_message.* = (try ErrorBuilder.init(self.program_context.allocator)) //
                 .text("The package `") //
-                .text(leaf.value) //
+                .text(leaf.value.string()) //
                 .text("` has already been imported") //
                 .at(present.location) //
                 .text("but you try to import it again") //
@@ -286,18 +316,23 @@ fn validateArity(program_context: *ProgramContext, generics_opt: ?*const grammar
     const generics = generics_opt.?.*;
 }
 
-pub fn semantics(allocator: *std.mem.Allocator, sources: []const grammar.Source, error_message: *ErrorMessage) !ir.Program {
-    var program_context = ProgramContext.init(allocator, error_message);
+pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, sources: []const grammar.Source, error_message: *ErrorMessage) !ir.Program {
+    var program_context = ProgramContext.init(allocator, identifier_pool, error_message);
 
     // Collect the set of packages and definitions.
     var source_contexts = try allocator.alloc(SourceContext, sources.len);
-    for (sources) |source, source_index| {
+    for (source_contexts) |*ctx, source_index| {
+        const source = sources[source_index];
+
+        // Initialize with all of the names from the source's package.
+        ctx.* = SourceContext.init(&program_context, source.package);
+
         for (source.definitions) |definition| {
             var package = try program_context.definePackage(source.package.package_name.value);
             switch (definition) {
-                .ClassDefinition => |c| try package.defineClass(c.class_name),
-                .UnionDefinition => |u| try package.defineUnion(u.union_name),
-                .InterfaceDefinition => |i| try package.defineInterface(i.interface_name),
+                .ClassDefinition => |c| try package.defineClass(c.class_name, ctx),
+                .UnionDefinition => |u| try package.defineUnion(u.union_name, ctx),
+                .InterfaceDefinition => |i| try package.defineInterface(i.interface_name, ctx),
             }
         }
     }
@@ -305,9 +340,6 @@ pub fn semantics(allocator: *std.mem.Allocator, sources: []const grammar.Source,
     // Create the source context for each scope.
     for (source_contexts) |*ctx, source_index| {
         const source = sources[source_index];
-
-        // Initialize with all of the names from the source's package.
-        ctx.* = SourceContext.init(&program_context, source.package);
 
         // Import packages and objects.
         for (source.imports) |import| {
@@ -320,6 +352,9 @@ pub fn semantics(allocator: *std.mem.Allocator, sources: []const grammar.Source,
                 },
             }
         }
+
+        // Bring into scope all the objects defined by the package.
+        //source.package.definitions;
     }
 
     // Collect the set of definitions and signatures.

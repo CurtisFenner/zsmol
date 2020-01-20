@@ -10,6 +10,8 @@ const parser = @import("parser.zig");
 pub const Blob = parser.Blob;
 pub const Location = parser.Location;
 pub const ErrorMessage = parser.ErrorMessage;
+const Identifier = @import("identifiers.zig").Identifier;
+const IdentifierPool = @import("identifiers.zig").IdentifierPool;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -27,11 +29,11 @@ pub const Operators = enum {
 };
 
 pub const Token = union(enum) {
-    Iden: []const u8,
-    TypeIden: []const u8,
+    Iden: Identifier,
+    TypeIden: Identifier,
 
     // Does NOT include the `#`.
-    TypeVar: []const u8,
+    TypeVar: Identifier,
 
     // Contains the sequence of bytes *described* by the string,
     // rather than the literal contents of the string literal
@@ -299,7 +301,7 @@ const uppercase_class = CharacterClass.fromRange('A', 'Z');
 const digit_class = CharacterClass.fromRange('0', '9');
 const identifier_class = lowercase_class.sum(uppercase_class).sum(digit_class);
 
-fn parseTypeVariable(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
+fn parseTypeVariable(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
     const stop = identifier_class.match(blob.content[from + 1 ..]);
     const name = blob.content[from + 1 .. from + 1 + stop];
     if (stop == 0 or !uppercase_class.contains(name[0])) {
@@ -307,7 +309,7 @@ fn parseTypeVariable(allocator: *std.mem.Allocator, blob: *const parser.Blob, fr
         compile_error.* = try parser.makeParseError(allocator, location, "Malformed type variable");
     }
 
-    const token = if (std.mem.eql(u8, "Self", name)) Token{ .TypeSelf = {} } else Token{ .TypeVar = name };
+    const token = if (std.mem.eql(u8, "Self", name)) Token{ .TypeSelf = {} } else Token{ .TypeVar = try identifier_pool.add(name) };
     return TokenizeResult{
         .consumed = stop + 1,
         .token = token,
@@ -412,7 +414,7 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
 }
 
 /// When returning a ParseError, writes a message to compile_error.
-fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
+fn parseToken(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
     assert(from < blob.content.len);
 
     const space_class = CharacterClass.fromList([_]u8{ ' ', '\t', '\n' });
@@ -429,7 +431,7 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
         const word = blob.content[from .. from + matching];
         return TokenizeResult{
             .consumed = matching,
-            .token = recognizePattern(keyword_strs, word) orelse Token{ .Iden = word },
+            .token = recognizePattern(keyword_strs, word) orelse Token{ .Iden = try identifier_pool.add(word) },
         };
     } else if ('A' <= at and at <= 'Z') {
         // Parse a TypeIden or a keyword.
@@ -437,7 +439,7 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
         const word = blob.content[from .. from + matching];
         return TokenizeResult{
             .consumed = matching,
-            .token = recognizePattern(type_keyword_strs, word) orelse Token{ .TypeIden = word },
+            .token = recognizePattern(type_keyword_strs, word) orelse Token{ .TypeIden = try identifier_pool.add(word) },
         };
     } else if (recognizePattern(punctuation_strs, blob.content[from .. from + 1])) |p| {
         return TokenizeResult{
@@ -464,7 +466,7 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
     } else if ('0' <= at and at <= '9') {
         return parseIntLiteral(allocator, blob, from, compile_error);
     } else if ('#' == at) {
-        return parseTypeVariable(allocator, blob, from, compile_error);
+        return parseTypeVariable(allocator, identifier_pool, blob, from, compile_error);
     } else if (at == '"') {
         return parseStringLiteral(allocator, blob, from, compile_error);
     }
@@ -482,7 +484,8 @@ fn parseToken(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usi
     return error.ParseError;
 }
 
-pub fn tokenize(allocator: *std.mem.Allocator, blob: *const parser.Blob, compile_error: *parser.ErrorMessage) !comb.Stream {
+/// RETURNS a stream of tokens for the given blob.
+pub fn tokenize(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, blob: *const parser.Blob, compile_error: *parser.ErrorMessage) !comb.Stream {
     var tokens = ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
     var locations = ArrayList(Location).init(allocator);
@@ -490,7 +493,7 @@ pub fn tokenize(allocator: *std.mem.Allocator, blob: *const parser.Blob, compile
 
     var from: usize = 0;
     while (from < blob.content.len) {
-        const result = try parseToken(allocator, blob, from, compile_error);
+        const result = try parseToken(allocator, identifier_pool, blob, from, compile_error);
         assert(result.consumed != 0);
         if (result.token) |token| {
             try tokens.append(token);
@@ -521,14 +524,15 @@ test "Tokenize `alpha`" {
         .content = "alpha",
     };
     var compile_error: ErrorMessage = undefined;
-    const result = try tokenize(std.debug.global_allocator, &blob, &compile_error);
-    assert(result.tokens.len == 1);
-    assert(result.locations.len == 2);
-    assert(result.locations[0].begin == 0);
-    assert(result.locations[0].end == 5);
-    assert(result.locations[1].begin == 5);
-    assert(result.locations[1].end == 5);
-    assert(std.mem.eql(u8, result.tokens[0].Iden, "alpha"));
+    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
+    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
+    assert(stream.tokens.len == 1);
+    assert(stream.locations.len == 2);
+    assert(stream.locations[0].begin == 0);
+    assert(stream.locations[0].end == 5);
+    assert(stream.locations[1].begin == 5);
+    assert(stream.locations[1].end == 5);
+    assert(stream.tokens[0].Iden.eq(identifier_pool.get("alpha").?));
 }
 
 test "Tokenize `alpha.beta`" {
@@ -537,23 +541,24 @@ test "Tokenize `alpha.beta`" {
         .content = "alpha.beta",
     };
     var compile_error: ErrorMessage = undefined;
-    const result = try tokenize(std.debug.global_allocator, &blob, &compile_error);
-    assert(result.tokens.len == 3);
-    assert(result.locations.len == 4);
-    assert(result.locations[0].begin == 0);
-    assert(result.locations[0].end == 5);
-    assert(result.locations[1].begin == 5);
-    assert(result.locations[1].end == 6);
-    assert(result.locations[2].begin == 6);
-    assert(result.locations[2].end == 10);
-    assert(result.locations[3].begin == 10);
-    assert(result.locations[3].end == 10);
-    assert(std.mem.eql(u8, result.tokens[0].Iden, "alpha"));
-    switch (result.tokens[1]) {
+    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
+    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
+    assert(stream.tokens.len == 3);
+    assert(stream.locations.len == 4);
+    assert(stream.locations[0].begin == 0);
+    assert(stream.locations[0].end == 5);
+    assert(stream.locations[1].begin == 5);
+    assert(stream.locations[1].end == 6);
+    assert(stream.locations[2].begin == 6);
+    assert(stream.locations[2].end == 10);
+    assert(stream.locations[3].begin == 10);
+    assert(stream.locations[3].end == 10);
+    assert(stream.tokens[0].Iden.eq(identifier_pool.get("alpha").?));
+    switch (stream.tokens[1]) {
         .PuncDot => {},
         else => unreachable,
     }
-    assert(std.mem.eql(u8, result.tokens[2].Iden, "beta"));
+    assert(stream.tokens[2].Iden.eq(identifier_pool.get("beta").?));
 }
 
 test "Tokenize `if`" {
@@ -562,14 +567,15 @@ test "Tokenize `if`" {
         .content = "if",
     };
     var compile_error: ErrorMessage = undefined;
-    const result = try tokenize(std.debug.global_allocator, &blob, &compile_error);
-    assert(result.tokens.len == 1);
-    assert(result.locations.len == 2);
-    assert(result.locations[0].begin == 0);
-    assert(result.locations[0].end == 2);
-    assert(result.locations[1].begin == 2);
-    assert(result.locations[1].end == 2);
-    switch (result.tokens[0]) {
+    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
+    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
+    assert(stream.tokens.len == 1);
+    assert(stream.locations.len == 2);
+    assert(stream.locations[0].begin == 0);
+    assert(stream.locations[0].end == 2);
+    assert(stream.locations[1].begin == 2);
+    assert(stream.locations[1].end == 2);
+    switch (stream.tokens[0]) {
         .KeyIf => {},
         else => unreachable,
     }
@@ -580,8 +586,8 @@ test "Tokenize `if`" {
 /// Parses the given Blob as a Smol source file.
 /// When this function returns a ParseError, the error is written to the
 /// compile_error parameter.
-pub fn parseSource(allocator: *std.mem.Allocator, blob: *const Blob, compile_error: *ErrorMessage) !Source {
-    const stream = try tokenize(allocator, blob, compile_error);
+pub fn parseSource(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, blob: *const Blob, compile_error: *ErrorMessage) !Source {
+    const stream = try tokenize(allocator, identifier_pool, blob, compile_error);
     const source = try Source.Parser.parse(allocator, stream, compile_error);
     return source;
 }
@@ -1261,7 +1267,8 @@ test "Parse simple variable declaration statement" {
     };
 
     var compile_error: ErrorMessage = undefined;
-    var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
+    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
+    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
 
     var block = Block.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
@@ -1274,7 +1281,7 @@ test "Parse simple variable declaration statement" {
     const var_decl = block.statements[0];
     assert(var_decl.VarSt.variables.len == 1);
     assert(var_decl.VarSt.init.len == 1);
-    assert(std.mem.eql(u8, "vv", var_decl.VarSt.variables[0].v_name.value));
+    assert(var_decl.VarSt.variables[0].v_name.value.eq(identifier_pool.get("vv").?));
     assert(std.mem.eql(u8, "xyz", var_decl.VarSt.init[0].ChainExpr.base.base.StringLiteral.value));
 }
 
@@ -1285,7 +1292,8 @@ test "Parse simple method" {
     };
 
     var compile_error: ErrorMessage = undefined;
-    var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
+    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
+    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
 
     var fn_def = FunctionDef.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
@@ -1303,7 +1311,8 @@ test "Parse program" {
     };
 
     var compile_error: ErrorMessage = undefined;
-    var stream = try tokenize(std.debug.global_allocator, &blob, &compile_error);
+    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
+    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
 
     var source = Source.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {

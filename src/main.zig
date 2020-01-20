@@ -7,6 +7,8 @@ const interpreter = @import("interpreter.zig");
 const grammar = @import("grammar.zig");
 const semantics = @import("semantics.zig");
 
+const IdentifierPool = @import("identifiers.zig").IdentifierPool;
+
 const std_core_file = @embedFile("standard/core.smol");
 
 fn blobFromFile(allocator: *std.mem.Allocator, file_name: []const u8) !*grammar.Blob {
@@ -88,10 +90,12 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
     var error_message: grammar.ErrorMessage = undefined;
 
     // Parse the standard library.
+    var identifier_pool = IdentifierPool.init(allocator);
+    errdefer identifier_pool.deinit();
     const core_blob = try allocator.create(grammar.Blob);
     core_blob.name = "<core>";
     core_blob.content = std_core_file[0..];
-    const core_source = grammar.parseSource(allocator, core_blob, &error_message) catch |err| switch (err) {
+    const core_source = grammar.parseSource(allocator, &identifier_pool, core_blob, &error_message) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.ParseError => {
             try error_message.render(stderr_file, args.find("diagnostic-base"));
@@ -103,7 +107,7 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
     // Parse the source files.
     for (args.plain) |arg| {
         const blob = try blobFromFile(allocator, arg);
-        const source = grammar.parseSource(allocator, blob, &error_message) catch |err| switch (err) {
+        const source = grammar.parseSource(allocator, &identifier_pool, blob, &error_message) catch |err| switch (err) {
             error.OutOfMemory => return err,
             error.ParseError => {
                 try error_message.render(stderr_file, args.find("diagnostic-base"));
@@ -113,7 +117,7 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
         try sources.append(source);
     }
 
-    const program = semantics.semantics(allocator, sources.toOwnedSlice(), &error_message) catch |err| switch (err) {
+    const program = semantics.semantics(allocator, &identifier_pool, sources.toOwnedSlice(), &error_message) catch |err| switch (err) {
         error.CompileError => {
             try error_message.render(stderr_file, args.find("diagnostic-base"));
             return 40;
