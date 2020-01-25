@@ -141,5 +141,9 @@ pub fn IdentifierMap(comptime Value: type) type {
             var iterator = IntIterator.init(key.id);
             return self.nibble_trie.put(&iterator, value);
         }
+
+        pub fn values(self: *Self) NibbleTrie(Value).ValueIterator {
+            return self.nibble_trie.values();
+        }
     };
 }

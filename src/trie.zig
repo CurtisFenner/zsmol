@@ -21,7 +21,7 @@ pub fn NibbleTrie(comptime Value: type) type {
 
         blocks: std.ArrayList(Block),
 
-        const ValueIterator = struct {
+        pub const ValueIterator = struct {
             trie: *Self,
             index: usize,
 
