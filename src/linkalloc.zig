@@ -179,9 +179,9 @@ const MaxHeapTest = struct {
             if (cloc) |loc| {
                 assert(loc < heap.size);
                 if (n != heap.items[loc]) {
-                    std.debug.warn("\n\nNOTIFICATION VIOLATION:\n");
-                    std.debug.warn("\tNotified {} at index {}\n", n, loc);
-                    std.debug.warn("\tHowever, items[{}] is {}\n", loc, heap.items[loc]);
+                    std.debug.warn("\n\nNOTIFICATION VIOLATION:\n", .{});
+                    std.debug.warn("\tNotified {} at index {}\n", .{ n, loc });
+                    std.debug.warn("\tHowever, items[{}] is {}\n", .{ loc, heap.items[loc] });
                     assert(false);
                 }
                 count += 1;
@@ -194,9 +194,9 @@ const MaxHeapTest = struct {
             if (i == 0) continue;
             var parent = (i - 1) / 2;
             if (smaller(undefined, heap.items[parent], heap.items[i])) {
-                std.debug.warn("\n\nHEAP INVARIANT VIOLATION:\n");
-                std.debug.warn("\titems[{}] = {}\n", i, heap.items[i]);
-                std.debug.warn("\titems[{}] = {}\n", parent, heap.items[parent]);
+                std.debug.warn("\n\nHEAP INVARIANT VIOLATION:\n", .{});
+                std.debug.warn("\titems[{}] = {}\n", .{ i, heap.items[i] });
+                std.debug.warn("\titems[{}] = {}\n", .{ parent, heap.items[parent] });
                 assert(false);
             }
             assert(!smaller(undefined, heap.items[parent], heap.items[i]));
@@ -212,7 +212,7 @@ const MaxHeapTest = struct {
     fn pop(self: *Self, heap: *Heap, expected: usize) void {
         const got = heap.popMax(self);
         if (expected != got) {
-            std.debug.warn("\nExpected popMax() to return {} but got {}\n", expected, got);
+            std.debug.warn("\nExpected popMax() to return {} but got {}\n", .{ expected, got });
             assert(false);
         }
         self.locations[got] = null;
@@ -318,7 +318,7 @@ pub const LinkAllocator = struct {
     }
 
     inline fn getBytes(self: *LinkAllocator, block: Block) []u8 {
-        var data = @sliceToBytes(self.data_as_words);
+        var data = std.mem.sliceAsBytes(self.data_as_words);
         return data[@sizeOf(usize) * (block.first_word + 2) .. @sizeOf(usize) * (block.end_word - 1)];
     }
 
@@ -351,7 +351,7 @@ pub const LinkAllocator = struct {
         var buffer = unaligned_buffer[aligned_from..aligned_to];
         std.mem.set(u8, buffer, 127);
 
-        var buffer_as_words = @alignCast(min_align, @bytesToSlice(usize, buffer));
+        var buffer_as_words = @alignCast(min_align, std.mem.bytesAsSlice(usize, buffer));
         const max_objects = buffer_as_words.len / 5;
 
         var open_heap = MaxHeap(usize).init(buffer_as_words[0 .. max_objects + 1]);
@@ -402,7 +402,7 @@ pub const LinkAllocator = struct {
 
     fn findUsableBlock(self: *LinkAllocator, new_size: usize, new_align: usize) !Usable {
         errdefer {
-            std.debug.warn("!!! Could not allocate {} bytes with alignment {}\n", new_size, new_align);
+            std.debug.warn("!!! Could not allocate {} bytes with alignment {}\n", .{ new_size, new_align });
             self.describe();
         }
         if (self.open_heap.isEmpty() or self.num_objects == self.max_objects) {
@@ -524,36 +524,35 @@ pub const LinkAllocator = struct {
 
     fn describe(self: *const LinkAllocator) void {
         var bad = false;
-        std.debug.warn("\n\n== LinkAllocator ==========================\n");
-        std.debug.warn("\tobjects: {}/{}\n", self.num_objects, self.max_objects);
-        std.debug.warn("\n");
+        std.debug.warn("\n\n== LinkAllocator ==========================\n", .{});
+        std.debug.warn("\tobjects: {}/{}\n", .{ self.num_objects, self.max_objects });
+        std.debug.warn("\n", .{});
         for (self.open_heap.items[0..self.open_heap.size]) |block_id, i| {
             const size = self.data_as_words[block_id] - block_id;
-            std.debug.warn("\topen_heap[{}] = block {} (size {})\n", i, block_id, size);
+            std.debug.warn("\topen_heap[{}] = block {} (size {})\n", .{ i, block_id, size });
         }
-        std.debug.warn("\n");
+        std.debug.warn("\n", .{});
         var index: usize = 0;
         while (index < self.data_as_words.len) {
             const block = self.readBlock(index);
             if (block.open_heap_location) |location| {
-                std.debug.warn("\tOPEN block {}: ends at {} (size {})\n", block.first_word, block.end_word, block.end_word - block.first_word);
+                std.debug.warn("\tOPEN block {}: ends at {} (size {})\n", .{ block.first_word, block.end_word, block.end_word - block.first_word });
             } else {
-                std.debug.warn("\tFILLED block {}: ends at {} (size {})\n", block.first_word, block.end_word, block.end_word - block.first_word);
+                std.debug.warn("\tFILLED block {}: ends at {} (size {})\n", .{ block.first_word, block.end_word, block.end_word - block.first_word });
             }
             if (self.data_as_words[block.end_word - 1] != index) {
-                std.debug.warn("\t\t[{}] is {}\n", block.end_word - 1, self.data_as_words[block.end_word - 1]);
+                std.debug.warn("\t\t[{}] is {}\n", .{ block.end_word - 1, self.data_as_words[block.end_word - 1] });
                 bad = true;
             }
             index = block.end_word;
         }
-        std.debug.warn("===========================================\n\n\n");
+        std.debug.warn("===========================================\n\n\n", .{});
         if (bad) unreachable;
     }
 };
 
 test "simple" {
     var buffer = [_]u8{0} ** 240;
-    std.debug.warn("\n");
     var la = LinkAllocator.init(buffer[0..]);
     var allocator = &la.allocator;
 

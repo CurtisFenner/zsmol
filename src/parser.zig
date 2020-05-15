@@ -67,25 +67,25 @@ pub const Location = struct {
         }
 
         if (diagnostic_base != null and std.mem.startsWith(u8, location.blob.name, diagnostic_base.?)) {
-            try file.write(location.blob.name[diagnostic_base.?.len..]);
+            try file.writeAll(location.blob.name[diagnostic_base.?.len..]);
         } else {
-            try file.write(location.blob.name);
+            try file.writeAll(location.blob.name);
         }
-        try file.write(":");
+        try file.writeAll(":");
         var buffer = [_]u8{0} ** 32;
         var width: usize = undefined;
         const format = std.fmt.FormatOptions{};
         width = std.fmt.formatIntBuf(&buffer, start_line, 10, false, format);
-        try file.write(buffer[0..width]);
-        try file.write(":");
+        try file.writeAll(buffer[0..width]);
+        try file.writeAll(":");
         width = std.fmt.formatIntBuf(&buffer, start_column, 10, false, format);
-        try file.write(buffer[0..width]);
-        try file.write("-");
+        try file.writeAll(buffer[0..width]);
+        try file.writeAll("-");
         width = std.fmt.formatIntBuf(&buffer, end_line, 10, false, format);
-        try file.write(buffer[0..width]);
-        try file.write(":");
+        try file.writeAll(buffer[0..width]);
+        try file.writeAll(":");
         width = std.fmt.formatIntBuf(&buffer, end_column, 10, false, format);
-        try file.write(buffer[0..width]);
+        try file.writeAll(buffer[0..width]);
     }
 
     pub fn printExcerpt(location: Location, file: var) !void {
@@ -116,11 +116,11 @@ pub const Location = struct {
                 const width = std.fmt.formatIntBuf(&buffer, line + 1, 10, false, std.fmt.FormatOptions{});
                 var padding = LINE_NUM_WIDTH - width;
                 while (padding != 0) {
-                    try file.write(" ");
+                    try file.writeAll(" ");
                     padding -= 1;
                 }
-                try file.write(buffer[0..width]);
-                try file.write(" | ");
+                try file.writeAll(buffer[0..width]);
+                try file.writeAll(" | ");
                 beginning_of_line = false;
             }
 
@@ -129,7 +129,7 @@ pub const Location = struct {
                 line += 1;
                 beginning_of_line = true;
                 if (should_draw_line) {
-                    try file.write("\n");
+                    try file.writeAll("\n");
                 }
             } else if (c == '\t') {
                 const previous_column = column;
@@ -137,7 +137,7 @@ pub const Location = struct {
                 var actual_tab_width = column - previous_column;
                 if (should_draw_line) {
                     while (actual_tab_width != 0) {
-                        try file.write(" ");
+                        try file.writeAll(" ");
                         actual_tab_width -= 1;
                     }
                 }
@@ -151,7 +151,7 @@ pub const Location = struct {
                     } else {
                         rep = '?';
                     }
-                    try file.write([_]u8{rep});
+                    try file.writeAll(&[_]u8{rep});
                     if (rep != ' ' and location.begin <= i and i < location.end) {
                         if (caret_low == null) {
                             caret_low = column;
@@ -165,26 +165,26 @@ pub const Location = struct {
             if (c != '\n' and i == location.blob.content.len - 1 and should_draw_line) {
                 // Insert an artificial line break if the file doesn't end with
                 // one.
-                try file.write("\n");
+                try file.writeAll("\n");
                 beginning_of_line = true;
             }
 
             if (should_draw_line and beginning_of_line) {
                 // Draw carets
                 if (caret_low) |low| {
-                    try file.write(" " ** LINE_NUM_WIDTH);
-                    try file.write(" | ");
+                    try file.writeAll(" " ** LINE_NUM_WIDTH);
+                    try file.writeAll(" | ");
                     var pad = low;
                     while (pad != 0) {
-                        try file.write(" ");
+                        try file.writeAll(" ");
                         pad -= 1;
                     }
                     var width = caret_high + 1 - low;
                     while (width != 0) {
-                        try file.write("^");
+                        try file.writeAll("^");
                         width -= 1;
                     }
-                    try file.write("\n");
+                    try file.writeAll("\n");
                 }
                 caret_low = null;
                 caret_high = undefined;
@@ -203,16 +203,16 @@ pub const ErrorMessage = struct {
     entries: []const Entry,
 
     pub fn render(e: ErrorMessage, file: var, diagnostic_base: ?[]const u8) !void {
-        try file.write("ERROR:\n");
+        try file.writeAll("ERROR:\n");
         for (e.entries) |entry, i| {
             switch (entry) {
-                .Text => |t| try file.write(t),
+                .Text => |t| try file.writeAll(t),
                 .AtLocation => |loc| {
-                    try file.write(" at ");
+                    try file.writeAll(" at ");
                     try loc.printPosition(file, diagnostic_base);
-                    try file.write(":\n");
+                    try file.writeAll(":\n");
                     try loc.printExcerpt(file);
-                    if (i + 1 != e.entries.len) try file.write("\n");
+                    if (i + 1 != e.entries.len) try file.writeAll("\n");
                 },
             }
         }
@@ -308,7 +308,16 @@ pub fn Combinators(comptime Token: type) type {
             /// should fail with the given error message.
             fn cut(comptime self: Fluent, comptime expected: []const u8) Fluent {
                 assert(self.fields.len != 0);
-                const init = self.fields[0 .. self.fields.len - 1];
+
+                // TODO: Working around ziglang bug #5293
+                // const init = self.fields[0 .. self.fields.len - 1];
+                var init: []const Field = &[_]Field{};
+                var i = 0;
+                while (i + 1 < self.fields.len) {
+                    init = init ++ &[_]Field{self.fields[i]};
+                    i += 1;
+                }
+
                 const last = self.fields[self.fields.len - 1];
                 assert(last.min_take_count != 0);
                 return Fluent{
@@ -482,12 +491,14 @@ pub fn Combinators(comptime Token: type) type {
                             @compileError("ChoiceParser requires field `" ++ field.name ++ "` in `" ++ @typeName(Into) ++ "` to be a const pointer");
                         }
                         const FieldType = @typeInfo(field.field_type).Pointer.child;
-                        const result = try @noInlineCall(FieldType.Parser._parse, allocator, stream, from);
-                        // TODO(#27272): Use a switch.
-                        const Tags = @TagType(@typeOf(result));
-                        const tag = Tags(result);
+                        // TODO(#2727): Shouldn't really need inline.
+                        const never_inline_modifier: std.builtin.CallOptions = std.builtin.CallOptions{ .modifier = .never_inline };
+                        const result = try @call(never_inline_modifier, FieldType.Parser._parse, .{ allocator, stream, from });
+                        // TODO(#2727): Use a switch.
+                        const Tags = @TagType(@TypeOf(result));
+                        const tag = @as(Tags, result);
                         if (tag == Tags.Result) {
-                            var ptr = try allocator.create(@typeOf(result.Result.value));
+                            var ptr = try allocator.create(@TypeOf(result.Result.value));
                             ptr.* = result.Result.value;
                             return InternalParseUnion(Into){
                                 .Result = InternalParseResult(Into){
@@ -546,13 +557,14 @@ pub fn Combinators(comptime Token: type) type {
 
                 fn _parseField(comptime field: Field, result: var, stream: Stream, from: usize, consumed: *usize, allocator: *std.mem.Allocator) error{OutOfMemory}!FieldResultUnion {
                     // Parse a repeated field.
+                    // TODO: Recover list's memory.
                     var list = std.ArrayList(field.CT).init(allocator);
 
-                    while (field.max_take_count <= 0 or list.count() < field.max_take_count) {
+                    while (field.max_take_count <= 0 or list.items.len < field.max_take_count) {
                         // Parse a separator, if any.
                         var sep_consumed: usize = 0;
                         if (comptime field.separator) |sep| {
-                            if (list.count() != 0) {
+                            if (list.items.len != 0) {
                                 const separator = try sep.Parser._parse(allocator, stream, from + consumed.*);
                                 // TODO: free separator's memory
                                 switch (separator) {
@@ -588,7 +600,7 @@ pub fn Combinators(comptime Token: type) type {
                         try list.append(element);
                     }
 
-                    var enough = list.count() >= field.min_take_count;
+                    var enough = list.items.len >= field.min_take_count;
                     if (!enough) {
                         if (field.cut_message) |cut_message| {
                             var entries = try allocator.alloc(ErrorMessage.Entry, 2);
@@ -606,19 +618,19 @@ pub fn Combinators(comptime Token: type) type {
                     } else {
                         if (field.max_take_count == 1) {
                             if (field.min_take_count == 0) {
-                                if (list.count() == 1) {
+                                if (list.items.len == 1) {
                                     // TODO: Recover memory?
-                                    @field(result, field.name) = &list.toOwnedSlice()[0];
+                                    @field(result, field.name) = &list.items[0];
                                 } else {
                                     // TODO: Recover memory?
                                     @field(result, field.name) = null;
                                 }
                             } else {
                                 // TODO: Recover memory
-                                @field(result, field.name) = list.toOwnedSlice()[0];
+                                @field(result, field.name) = list.items[0];
                             }
                         } else {
-                            @field(result, field.name) = list.toOwnedSlice();
+                            @field(result, field.name) = list.items;
                         }
                     }
                     return FieldResultUnion{ .Success = {} };
@@ -629,10 +641,13 @@ pub fn Combinators(comptime Token: type) type {
                     var consumed: usize = 0;
                     // TODO: Use a bump-allocator that doesn't require recursive deallocation.
 
+                    // TODO(ziglang #5170):
                     inline for (fields) |field| {
-                        const r = try @noInlineCall(@This()._parseField, field, &result, stream, from, &consumed, allocator);
-                        const Tags = @TagType(@typeOf(r));
-                        const tag = Tags(r);
+                        comptime const never_inline_modifier = std.builtin.CallOptions{ .modifier = .never_inline };
+                        const r = try @call(never_inline_modifier, @This()._parseField, .{ field, &result, stream, from, &consumed, allocator });
+                        const Tags = @TagType(@TypeOf(r));
+                        const tag = @as(Tags, r);
+                        // TODO(#2727)
                         if (tag == Tags.Success) {
                             // Continue to the next field.
                         } else if (tag == Tags.Fail) {
@@ -657,7 +672,7 @@ pub fn Combinators(comptime Token: type) type {
         }
 
         /// The `fluent` instance is the start for the Fluent interface.
-        pub const fluent = Fluent{ .fields = [_]Field{} };
+        pub const fluent = Fluent{ .fields = &[_]Field{} };
     };
 }
 
@@ -686,8 +701,8 @@ test "Separator" {
     };
 
     const stream = comb.Stream{
-        .tokens = [_]Token{Token{ .A = {} }},
-        .locations = [_]Location{ undefined, undefined },
+        .tokens = &[_]Token{Token{ .A = {} }},
+        .locations = &[_]Location{ undefined, undefined },
     };
 
     var buffer: [4000]u8 = undefined;
@@ -769,7 +784,7 @@ test "Lisp" {
 
     var parse_error: ErrorMessage = undefined;
 
-    const stdout_file = try std.io.getStdOut();
+    const stdout_file = std.io.getStdOut();
     const result = AST.Phrase.Parser.parse(allocator, stream, &parse_error) catch |err| switch (err) {
         error.ParseError => |e| {
             try parse_error.render(stdout_file, "");

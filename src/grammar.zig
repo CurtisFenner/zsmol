@@ -417,8 +417,8 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
 fn parseToken(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
     assert(from < blob.content.len);
 
-    const space_class = CharacterClass.fromList([_]u8{ ' ', '\t', '\n' });
-    const operator_class = CharacterClass.fromList([_]u8{ '=', '<', '+', '-', '*', '/', '%' });
+    const space_class = CharacterClass.fromList(&[_]u8{ ' ', '\t', '\n' });
+    const operator_class = CharacterClass.fromList(&[_]u8{ '=', '<', '+', '-', '*', '/', '%' });
     const comment_body_class = CharacterClass.fromRange(32, 127);
 
     const remaining = blob.content.len - from;
@@ -431,7 +431,7 @@ fn parseToken(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, b
         const word = blob.content[from .. from + matching];
         return TokenizeResult{
             .consumed = matching,
-            .token = recognizePattern(keyword_strs, word) orelse Token{ .Iden = try identifier_pool.add(word) },
+            .token = recognizePattern(&keyword_strs, word) orelse Token{ .Iden = try identifier_pool.add(word) },
         };
     } else if ('A' <= at and at <= 'Z') {
         // Parse a TypeIden or a keyword.
@@ -439,9 +439,9 @@ fn parseToken(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, b
         const word = blob.content[from .. from + matching];
         return TokenizeResult{
             .consumed = matching,
-            .token = recognizePattern(type_keyword_strs, word) orelse Token{ .TypeIden = try identifier_pool.add(word) },
+            .token = recognizePattern(&type_keyword_strs, word) orelse Token{ .TypeIden = try identifier_pool.add(word) },
         };
-    } else if (recognizePattern(punctuation_strs, blob.content[from .. from + 1])) |p| {
+    } else if (recognizePattern(&punctuation_strs, blob.content[from .. from + 1])) |p| {
         return TokenizeResult{
             .consumed = 1,
             .token = p,
@@ -460,7 +460,7 @@ fn parseToken(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, b
             return error.ParseError;
         }
         const op = blob.content[from .. from + matching];
-        if (recognizePattern(operator_strs, op)) |op_token| {
+        if (recognizePattern(&operator_strs, op)) |op_token| {
             return TokenizeResult{ .consumed = op.len, .token = op_token };
         }
     } else if ('0' <= at and at <= '9') {
@@ -524,8 +524,8 @@ test "Tokenize `alpha`" {
         .content = "alpha",
     };
     var compile_error: ErrorMessage = undefined;
-    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
-    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
+    var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
     assert(stream.tokens.len == 1);
     assert(stream.locations.len == 2);
     assert(stream.locations[0].begin == 0);
@@ -541,8 +541,8 @@ test "Tokenize `alpha.beta`" {
         .content = "alpha.beta",
     };
     var compile_error: ErrorMessage = undefined;
-    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
-    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
+    var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
     assert(stream.tokens.len == 3);
     assert(stream.locations.len == 4);
     assert(stream.locations[0].begin == 0);
@@ -567,8 +567,8 @@ test "Tokenize `if`" {
         .content = "if",
     };
     var compile_error: ErrorMessage = undefined;
-    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
-    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
+    var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
     assert(stream.tokens.len == 1);
     assert(stream.locations.len == 2);
     assert(stream.locations[0].begin == 0);
@@ -603,9 +603,60 @@ pub fn Leaf(comptime name: []const u8) type {
 }
 
 test "leaf" {
-    const a = Leaf("TypeVar");
+    const a = LeafTypeVar;
     // a.Parser.parse();
 }
+
+pub const LeafIden = Leaf("Iden");
+pub const LeafIntLiteral = Leaf("IntLiteral");
+pub const LeafKeyAssert = Leaf("KeyAssert");
+pub const LeafKeyCase = Leaf("KeyCase");
+pub const LeafKeyClass = Leaf("KeyClass");
+pub const LeafKeyDo = Leaf("KeyDo");
+pub const LeafKeyElse = Leaf("KeyElse");
+pub const LeafKeyElseif = Leaf("KeyElseif");
+pub const LeafKeyEnsures = Leaf("KeyEnsures");
+pub const LeafKeyFalse = Leaf("KeyFalse");
+pub const LeafKeyFn = Leaf("KeyFn");
+pub const LeafKeyForall = Leaf("KeyForall");
+pub const LeafKeyIf = Leaf("KeyIf");
+pub const LeafKeyImport = Leaf("KeyImport");
+pub const LeafKeyInterface = Leaf("KeyInterface");
+pub const LeafKeyIs = Leaf("KeyIs");
+pub const LeafKeyIsa = Leaf("KeyIsa");
+pub const LeafKeyMatch = Leaf("KeyMatch");
+pub const LeafKeyMethod = Leaf("KeyMethod");
+pub const LeafKeyNew = Leaf("KeyNew");
+pub const LeafKeyPackage = Leaf("KeyPackage");
+pub const LeafKeyRequires = Leaf("KeyRequires");
+pub const LeafKeyReturn = Leaf("KeyReturn");
+pub const LeafKeyThis = Leaf("KeyThis");
+pub const LeafKeyTrue = Leaf("KeyTrue");
+pub const LeafKeyUnion = Leaf("KeyUnion");
+pub const LeafKeyVar = Leaf("KeyVar");
+pub const LeafKeyWhen = Leaf("KeyWhen");
+pub const LeafOperator = Leaf("Operator");
+pub const LeafPuncAssign = Leaf("PuncAssign");
+pub const LeafPuncBang = Leaf("PuncBang");
+pub const LeafPuncBar = Leaf("PuncBar");
+pub const LeafPuncColon = Leaf("PuncColon");
+pub const LeafPuncComma = Leaf("PuncComma");
+pub const LeafPuncCurlyClose = Leaf("PuncCurlyClose");
+pub const LeafPuncCurlyOpen = Leaf("PuncCurlyOpen");
+pub const LeafPuncDot = Leaf("PuncDot");
+pub const LeafPuncRoundClose = Leaf("PuncRoundClose");
+pub const LeafPuncRoundOpen = Leaf("PuncRoundOpen");
+pub const LeafPuncSemicolon = Leaf("PuncSemicolon");
+pub const LeafPuncSquareClose = Leaf("PuncSquareClose");
+pub const LeafPuncSquareOpen = Leaf("PuncSquareOpen");
+pub const LeafStringLiteral = Leaf("StringLiteral");
+pub const LeafTypeBoolean = Leaf("TypeBoolean");
+pub const LeafTypeIden = Leaf("TypeIden");
+pub const LeafTypeInt = Leaf("TypeInt");
+pub const LeafTypeSelf = Leaf("TypeSelf");
+pub const LeafTypeString = Leaf("TypeString");
+pub const LeafTypeUnit = Leaf("TypeUnit");
+pub const LeafTypeVar = Leaf("TypeVar");
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -624,12 +675,12 @@ pub const Source = struct {
 };
 
 pub const PackageDef = struct {
-    package_name: Leaf("Iden"),
+    package_name: LeafIden,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyPackage")) //
-        .req("package_name", Leaf("Iden")).cut("Expected a package name") //
-        .req("_", Leaf("PuncSemicolon")).cut("Expected a `;`") //
+        .req("_", LeafKeyPackage) //
+        .req("package_name", LeafIden).cut("Expected a package name") //
+        .req("_", LeafPuncSemicolon).cut("Expected a `;`") //
         .seq(@This());
     location: Location,
 };
@@ -638,9 +689,9 @@ pub const Import = struct {
     imported: ImportChoice,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyImport")) //
+        .req("_", LeafKeyImport) //
         .req("imported", ImportChoice).cut("Expected the name of a package or object to import") //
-        .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` to finish an `import`") //
+        .req("_", LeafPuncSemicolon).cut("Expected a `;` to finish an `import`") //
         .seq(@This());
     location: Location,
 };
@@ -653,22 +704,22 @@ pub const ImportChoice = union(enum) {
 };
 
 pub const ImportOfObject = struct {
-    package_name: Leaf("Iden"),
-    object_name: Leaf("TypeIden"),
+    package_name: LeafIden,
+    object_name: LeafTypeIden,
 
     pub const Parser = comb.fluent //
-        .req("package_name", Leaf("Iden")) //
-        .req("_", Leaf("PuncColon")) //
-        .req("object_name", Leaf("TypeIden")) //
+        .req("package_name", LeafIden) //
+        .req("_", LeafPuncColon) //
+        .req("object_name", LeafTypeIden) //
         .seq(@This());
     location: Location,
 };
 
 pub const ImportOfPackage = struct {
-    package_name: Leaf("Iden"),
+    package_name: LeafIden,
 
     pub const Parser = comb.fluent //
-        .req("package_name", Leaf("Iden")).seq(@This());
+        .req("package_name", LeafIden).seq(@This());
     location: Location,
 };
 
@@ -677,7 +728,7 @@ pub const Definition = union(enum) {
     UnionDefinition: *const UnionDefinition,
     InterfaceDefinition: *const InterfaceDefinition,
 
-    // pub fn name(self: Definition) Leaf("TypeIden") {
+    // pub fn name(self: Definition) LeafTypeIden {
     //     switch (self) {
     //         .ClassDefinition => |c| return c.class_name,
     //         .UnionDefinition => |u| return u.union_name,
@@ -689,42 +740,42 @@ pub const Definition = union(enum) {
 };
 
 pub const ClassDefinition = struct {
-    class_name: Leaf("TypeIden"),
+    class_name: LeafTypeIden,
     generics: ?*const Generics,
     implements: ?*const Implements,
     fields: []const Field,
     members: []const FunctionDef,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyClass")) //
-        .req("class_name", Leaf("TypeIden")).cut("Expected a class name after `class`") //
+        .req("_", LeafKeyClass) //
+        .req("class_name", LeafTypeIden).cut("Expected a class name after `class`") //
         .opt("generics", Generics) //
         .opt("implements", Implements) //
-        .req("_", Leaf("PuncCurlyOpen")).cut("Expected a `{` to begin a class's body") //
+        .req("_", LeafPuncCurlyOpen).cut("Expected a `{` to begin a class's body") //
         .star("fields", Field) //
         .star("members", FunctionDef) //
-        .req("_", Leaf("PuncCurlyClose")).cut("Expected another class member or a `}` to close a class's body") //
+        .req("_", LeafPuncCurlyClose).cut("Expected another class member or a `}` to close a class's body") //
         .seq(@This());
 
     location: Location,
 };
 
 pub const UnionDefinition = struct {
-    union_name: Leaf("TypeIden"),
+    union_name: LeafTypeIden,
     generics: ?*const Generics,
     implements: ?*const Implements,
     fields: []const Field,
     members: []const FunctionDef,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyUnion")) //
-        .req("union_name", Leaf("TypeIden")).cut("Expected a union name after `union`") //
+        .req("_", LeafKeyUnion) //
+        .req("union_name", LeafTypeIden).cut("Expected a union name after `union`") //
         .opt("generics", Generics) //
         .opt("implements", Implements) //
-        .req("_", Leaf("PuncCurlyOpen")).cut("Expected a `{` to begin a union's body") //
+        .req("_", LeafPuncCurlyOpen).cut("Expected a `{` to begin a union's body") //
         .star("fields", Field) //
         .star("members", FunctionDef) //
-        .req("_", Leaf("PuncCurlyClose")).cut("Expected another union member or a `}` to close a union's body") //
+        .req("_", LeafPuncCurlyClose).cut("Expected another union member or a `}` to close a union's body") //
         .seq(@This());
     location: Location,
 };
@@ -733,8 +784,8 @@ pub const Implements = struct {
     constraints: []const Type,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyIs")) //
-        .plusSep("constraints", Type, Leaf("PuncComma")).cut("Expected one or more type constraints after `is`") //
+        .req("_", LeafKeyIs) //
+        .plusSep("constraints", Type, LeafPuncComma).cut("Expected one or more type constraints after `is`") //
         .seq(@This());
     location: Location,
 };
@@ -743,25 +794,25 @@ pub const Field = struct {
     field: Variable,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyVar")) //
+        .req("_", LeafKeyVar) //
         .req("field", Variable) //
-        .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` after a field") //
+        .req("_", LeafPuncSemicolon).cut("Expected a `;` after a field") //
         .seq(@This());
     location: Location,
 };
 
 pub const InterfaceDefinition = struct {
-    interface_name: Leaf("TypeIden"),
+    interface_name: LeafTypeIden,
     generics: ?*const Generics,
     members: []const InterfaceMember,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyInterface")) //
-        .req("interface_name", Leaf("TypeIden")).cut("Expected an interface name after `interface`") //
+        .req("_", LeafKeyInterface) //
+        .req("interface_name", LeafTypeIden).cut("Expected an interface name after `interface`") //
         .opt("generics", Generics) //
-        .req("_", Leaf("PuncCurlyOpen")).cut("Expected a `{` to begin an interface's body") //
+        .req("_", LeafPuncCurlyOpen).cut("Expected a `{` to begin an interface's body") //
         .star("members", InterfaceMember) //
-        .req("_", Leaf("PuncCurlyClose")).cut("Expected another interface member or a `}` to close an interface's body") //
+        .req("_", LeafPuncCurlyClose).cut("Expected another interface member or a `}` to close an interface's body") //
         .seq(@This());
     location: Location,
 };
@@ -771,20 +822,20 @@ pub const InterfaceMember = struct {
 
     pub const Parser = comb.fluent //
         .req("signature", Signature) //
-        .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` after the interface member's signature") //
+        .req("_", LeafPuncSemicolon).cut("Expected a `;` after the interface member's signature") //
         .seq(@This());
     location: Location,
 };
 
 pub const Generics = struct {
-    parameters: []const Leaf("TypeVar"),
+    parameters: []const LeafTypeVar,
     constraints: ?*const TypeConstraints,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("PuncSquareOpen")) //
-        .plusSep("parameters", Leaf("TypeVar"), Leaf("PuncComma")).cut("Expected one or more type variables after `[`") //
+        .req("_", LeafPuncSquareOpen) //
+        .plusSep("parameters", LeafTypeVar, LeafPuncComma).cut("Expected one or more type variables after `[`") //
         .opt("constraints", TypeConstraints) //
-        .req("_", Leaf("PuncSquareClose")).cut("Expected a `]` to finish a type-variables block") //
+        .req("_", LeafPuncSquareClose).cut("Expected a `]` to finish a type-variables block") //
         .seq(@This());
     location: Location,
 };
@@ -793,55 +844,55 @@ pub const TypeConstraints = struct {
     constraints: []const TypeConstraint,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("PuncBar")) //
-        .plusSep("constraints", TypeConstraint, Leaf("PuncComma")).cut("Expected a type-constraint after `|`") //
+        .req("_", LeafPuncBar) //
+        .plusSep("constraints", TypeConstraint, LeafPuncComma).cut("Expected a type-constraint after `|`") //
         .seq(@This());
     location: Location,
 };
 
 pub const TypeConstraint = struct {
-    variable: Leaf("TypeVar"),
+    variable: LeafTypeVar,
     constraint: Type,
 
     pub const Parser = comb.fluent //
-        .req("variable", Leaf("TypeVar")) //
-        .req("_", Leaf("KeyIs")).cut("Expected `is` to make a type-constraint") //
+        .req("variable", LeafTypeVar) //
+        .req("_", LeafKeyIs).cut("Expected `is` to make a type-constraint") //
         .req("constraint", Type).cut("Expected a constraining type after `is`") //
         .seq(@This());
     location: Location,
 };
 
 pub const Type = union(enum) {
-    Boolean: *const Leaf("TypeBoolean"),
-    Int: *const Leaf("TypeInt"),
-    String: *const Leaf("TypeString"),
-    Unit: *const Leaf("TypeUnit"),
-    Self: *const Leaf("TypeSelf"),
-    Generic: *const Leaf("TypeVar"),
+    Boolean: *const LeafTypeBoolean,
+    Int: *const LeafTypeInt,
+    String: *const LeafTypeString,
+    Unit: *const LeafTypeUnit,
+    Self: *const LeafTypeSelf,
+    Generic: *const LeafTypeVar,
     Concrete: *const ConcreteType,
     pub const Parser = comb.ChoiceParser(@This());
 };
 
 pub const ConcreteType = struct {
     qualifier: ?*const PackageQualifier,
-    object: Leaf("TypeIden"),
+    object: LeafTypeIden,
     // TODO: Use some kind of mapping to replace this with a plain list.
     arguments: ?*const TypeArguments,
 
     pub const Parser = comb.fluent //
         .opt("qualifier", PackageQualifier) //
-        .req("object", Leaf("TypeIden")) //
+        .req("object", LeafTypeIden) //
         .opt("arguments", TypeArguments) //
         .seq(@This());
     location: Location,
 };
 
 pub const PackageQualifier = struct {
-    package: Leaf("Iden"),
+    package: LeafIden,
 
     pub const Parser = comb.fluent //
-        .req("package", Leaf("Iden")) //
-        .req("_", Leaf("PuncColon")) //
+        .req("package", LeafIden) //
+        .req("_", LeafPuncColon) //
         .seq(@This());
     location: Location,
 };
@@ -850,17 +901,17 @@ pub const TypeArguments = struct {
     arguments: []const Type,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("PuncSquareOpen")) //
-        .plusSep("arguments", Type, Leaf("PuncComma")).cut("Expected a type-argument after `[`") //
-        .req("_", Leaf("PuncSquareClose")).cut("Expected a `]` to finish the type-argument list") //
+        .req("_", LeafPuncSquareOpen) //
+        .plusSep("arguments", Type, LeafPuncComma).cut("Expected a type-argument after `[`") //
+        .req("_", LeafPuncSquareClose).cut("Expected a `]` to finish the type-argument list") //
         .seq(@This());
     location: Location,
 };
 
 pub const Signature = struct {
     modifier: FunctionModifier,
-    name: Leaf("Iden"),
-    bang: ?*const Leaf("PuncBang"),
+    name: LeafIden,
+    bang: ?*const LeafPuncBang,
     parameters: []const Variable,
     return_types: []const Type,
     requires: []const Requires,
@@ -868,12 +919,12 @@ pub const Signature = struct {
 
     pub const Parser = comb.fluent //
         .req("modifier", FunctionModifier) //
-        .req("name", Leaf("Iden")).cut("Expected a function name after `fn`/`method`") //
-        .opt("bang", Leaf("PuncBang")) //
-        .req("_", Leaf("PuncRoundOpen")).cut("Expected a `(` to begin the function's parameters") //
-        .starSep("parameters", Variable, Leaf("PuncComma")) //
-        .req("_", Leaf("PuncRoundClose")).cut("Expected a `)` to finish the function's parameters") //
-        .plusSep("return_types", Type, Leaf("PuncComma")).cut("Expected the function's return type") //
+        .req("name", LeafIden).cut("Expected a function name after `fn`/`method`") //
+        .opt("bang", LeafPuncBang) //
+        .req("_", LeafPuncRoundOpen).cut("Expected a `(` to begin the function's parameters") //
+        .starSep("parameters", Variable, LeafPuncComma) //
+        .req("_", LeafPuncRoundClose).cut("Expected a `)` to finish the function's parameters") //
+        .plusSep("return_types", Type, LeafPuncComma).cut("Expected the function's return type") //
         .star("requires", Requires) //
         .star("ensures", Ensures) //
         .seq(@This());
@@ -881,15 +932,15 @@ pub const Signature = struct {
 };
 
 pub const FunctionModifier = union(enum) {
-    method: *const Leaf("KeyMethod"),
-    function: *const Leaf("KeyFn"),
+    method: *const LeafKeyMethod,
+    function: *const LeafKeyFn,
     pub const Parser = comb.ChoiceParser(@This());
 };
 
 pub const Requires = struct {
     condition: Condition,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyRequires")) //
+        .req("_", LeafKeyRequires) //
         .req("condition", Condition).cut("Expected a condition after `requires`") //
         .seq(@This());
     location: Location,
@@ -898,7 +949,7 @@ pub const Requires = struct {
 pub const Ensures = struct {
     condition: Condition,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyEnsures")) //
+        .req("_", LeafKeyEnsures) //
         .req("condition", Condition).cut("Expected a condition after `ensures`") //
         .seq(@This());
     location: Location,
@@ -917,18 +968,18 @@ pub const Condition = struct {
 pub const ConditionWhen = struct {
     whens: []const Expression,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyWhen")) //
-        .plusSep("whens", Expression, Leaf("PuncComma")).cut("Expected one or more boolean expressions after `when`") //
+        .req("_", LeafKeyWhen) //
+        .plusSep("whens", Expression, LeafPuncComma).cut("Expected one or more boolean expressions after `when`") //
         .seq(@This());
     location: Location,
 };
 
 pub const Variable = struct {
-    v_name: Leaf("Iden"),
+    v_name: LeafIden,
     v_type: Type,
 
     pub const Parser = comb.fluent //
-        .req("v_name", Leaf("Iden")) //
+        .req("v_name", LeafIden) //
         .req("v_type", Type) //
         .seq(@This());
     location: Location,
@@ -949,9 +1000,9 @@ pub const Block = struct {
     statements: []const Statement,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("PuncCurlyOpen")) //
+        .req("_", LeafPuncCurlyOpen) //
         .star("statements", Statement) //
-        .req("_", Leaf("PuncCurlyClose")).cut("Expected a `}` to finish a block") //
+        .req("_", LeafPuncCurlyClose).cut("Expected a `}` to finish a block") //
         .seq(@This());
     location: Location,
 };
@@ -973,11 +1024,11 @@ pub const VarSt = struct {
     init: []const Expression,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyVar")) //
-        .plusSep("variables", Variable, Leaf("PuncComma")).cut("Expected one or more variables after `var`") //
-        .req("_", Leaf("PuncAssign")).cut("Expected an `=` after variable(s)") //
-        .plusSep("init", Expression, Leaf("PuncComma")).cut("Expected an expression after `=`") //
-        .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` to finish a var-statement") //
+        .req("_", LeafKeyVar) //
+        .plusSep("variables", Variable, LeafPuncComma).cut("Expected one or more variables after `var`") //
+        .req("_", LeafPuncAssign).cut("Expected an `=` after variable(s)") //
+        .plusSep("init", Expression, LeafPuncComma).cut("Expected an expression after `=`") //
+        .req("_", LeafPuncSemicolon).cut("Expected a `;` to finish a var-statement") //
         .seq(@This());
     location: Location,
 };
@@ -985,9 +1036,9 @@ pub const VarSt = struct {
 pub const DoSt = struct {
     expression: Expression,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyDo")) //
+        .req("_", LeafKeyDo) //
         .req("expression", Expression).cut("Expected an expression after `do`") //
-        .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` to finish a do-statement") //
+        .req("_", LeafPuncSemicolon).cut("Expected a `;` to finish a do-statement") //
         .seq(@This());
     location: Location,
 };
@@ -998,7 +1049,7 @@ pub const IfSt = struct {
     elseif_clauses: []const ElseifClause,
     else_clause: ?*const ElseClause,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyIf")) //
+        .req("_", LeafKeyIf) //
         .req("condition", Expression).cut("Expected a boolean expression after `if`") //
         .req("then_body", Block).cut("Expected a then-body after an if-condition") //
         .star("elseif_clauses", ElseifClause) //
@@ -1011,7 +1062,7 @@ pub const ElseifClause = struct {
     condition: Expression,
     body: Block,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyElseif")) //
+        .req("_", LeafKeyElseif) //
         .req("condition", Expression).cut("Expected a boolean expression after `elseif`") //
         .req("body", Block).cut("Expected an elseif-body after an elseif-condition") //
         .seq(@This());
@@ -1021,7 +1072,7 @@ pub const ElseifClause = struct {
 pub const ElseClause = struct {
     body: Block,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyElse")) //
+        .req("_", LeafKeyElse) //
         .req("body", Block).cut("Expected an else-body after `else`") //
         .seq(@This());
     location: Location,
@@ -1031,24 +1082,24 @@ pub const MatchSt = struct {
     target: Expression,
     cases: []const MatchCase,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyMatch")) //
+        .req("_", LeafKeyMatch) //
         .req("target", Expression).cut("Expected a target expression after `match`") //
-        .req("_", Leaf("PuncCurlyOpen")).cut("Expected a `{` to begin a match") //
+        .req("_", LeafPuncCurlyOpen).cut("Expected a `{` to begin a match") //
         .plus("cases", MatchCase).cut("Expected one or more match case clauses") //
-        .req("_", Leaf("PuncCurlyClose")).cut("Expected a `}` to finish a match") //
+        .req("_", LeafPuncCurlyClose).cut("Expected a `}` to finish a match") //
         .seq(@This());
     location: Location,
 };
 
 pub const MatchCase = struct {
-    variable: Leaf("Iden"),
+    variable: LeafIden,
     body: Block,
-    case: Leaf("Iden"),
+    case: LeafIden,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyCase")) //
-        .req("variable", Leaf("Iden")).cut("Expected a variable name after `case`") //
-        .req("_", Leaf("KeyIs")).cut("Expected `is` after match variable") //
-        .req("case", Leaf("Iden")).cut("Expected variant case after `is`") //
+        .req("_", LeafKeyCase) //
+        .req("variable", LeafIden).cut("Expected a variable name after `case`") //
+        .req("_", LeafKeyIs).cut("Expected `is` after match variable") //
+        .req("case", LeafIden).cut("Expected variant case after `is`") //
         .req("body", Block).cut("Expected a case-body after a case tag") //
         .seq(@This());
     location: Location,
@@ -1057,9 +1108,9 @@ pub const MatchCase = struct {
 pub const AssertSt = struct {
     condition: Condition,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyAssert")) //
+        .req("_", LeafKeyAssert) //
         .req("condition", Condition).cut("Expected a condition after `assert`") //
-        .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` to finish an assert-statement") //
+        .req("_", LeafPuncSemicolon).cut("Expected a `;` to finish an assert-statement") //
         .seq(@This());
     location: Location,
 };
@@ -1067,21 +1118,21 @@ pub const AssertSt = struct {
 pub const ReturnSt = struct {
     values: []const Expression,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyReturn")) //
-        .starSep("values", Expression, Leaf("PuncComma")) //
-        .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` to finish a return-statement") //
+        .req("_", LeafKeyReturn) //
+        .starSep("values", Expression, LeafPuncComma) //
+        .req("_", LeafPuncSemicolon).cut("Expected a `;` to finish a return-statement") //
         .seq(@This());
     location: Location,
 };
 
 pub const AssignSt = struct {
-    vars: []const Leaf("Iden"),
+    vars: []const LeafIden,
     init: []const Expression,
     pub const Parser = comb.fluent //
-        .plusSep("vars", Leaf("Iden"), Leaf("PuncComma")) //
-        .req("_", Leaf("PuncAssign")).cut("Expected an `=` after assignment variables") //
-        .plusSep("init", Expression, Leaf("PuncComma")).cut("Expected one or more expressions after `=`") //
-        .req("_", Leaf("PuncSemicolon")).cut("Expected a `;` to finish an assignment-statement") //
+        .plusSep("vars", LeafIden, LeafPuncComma) //
+        .req("_", LeafPuncAssign).cut("Expected an `=` after assignment variables") //
+        .plusSep("init", Expression, LeafPuncComma).cut("Expected one or more expressions after `=`") //
+        .req("_", LeafPuncSemicolon).cut("Expected a `;` to finish an assignment-statement") //
         .seq(@This());
     location: Location,
 };
@@ -1118,20 +1169,20 @@ pub const ExprAtom = struct {
 };
 
 pub const ExprOp = struct {
-    operator: Leaf("Operator"),
+    operator: LeafOperator,
     rhs: ExprAtom,
     pub const Parser = comb.fluent //
-        .req("operator", Leaf("Operator")) //
+        .req("operator", LeafOperator) //
         .req("rhs", ExprAtom).cut("Expected an expression after an operator") //
         .seq(@This());
     location: Location,
 };
 
 pub const IsaOp = struct {
-    tag: Leaf("Iden"),
+    tag: LeafIden,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyIsa")) //
-        .req("tag", Leaf("Iden")).cut("Expected a union tag after `isa`") //
+        .req("_", LeafKeyIsa) //
+        .req("tag", LeafIden).cut("Expected a union tag after `isa`") //
         .seq(@This());
     location: Location,
 };
@@ -1142,10 +1193,10 @@ pub const ForallExpr = struct {
     conditions: ?*const ForallIf,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyForall")) //
-        .req("_", Leaf("PuncRoundOpen")).cut("Expected a `(` after `forall`") //
+        .req("_", LeafKeyForall) //
+        .req("_", LeafPuncRoundOpen).cut("Expected a `(` after `forall`") //
         .req("variable", Variable).cut("Expected a variable in a `forall` quantifier") //
-        .req("_", Leaf("PuncRoundClose")).cut("Expected a `)` to finish quantified variables list") //
+        .req("_", LeafPuncRoundClose).cut("Expected a `)` to finish quantified variables list") //
         .req("quantified", Expression).cut("Expected a quantified expression") //
         .opt("conditions", ForallIf) //
         .seq(@This());
@@ -1155,8 +1206,8 @@ pub const ForallExpr = struct {
 pub const ForallIf = struct {
     conditions: []const Expression,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyIf")) //
-        .plusSep("conditions", Expression, Leaf("PuncComma")).cut("Expected a boolean expression") //
+        .req("_", LeafKeyIf) //
+        .plusSep("conditions", Expression, LeafPuncComma).cut("Expected a boolean expression") //
         .seq(@This());
     location: Location,
 };
@@ -1169,41 +1220,41 @@ pub const ExprAccess = union(enum) {
 };
 
 pub const MethodAccess = struct {
-    m_name: Leaf("Iden"),
-    bang: ?*const Leaf("PuncBang"),
+    m_name: LeafIden,
+    bang: ?*const LeafPuncBang,
     arguments: []const Expression,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("PuncDot")) //
-        .req("m_name", Leaf("Iden")) //
-        .opt("bang", Leaf("PuncBang")) //
-        .req("_", Leaf("PuncRoundOpen")) //
-        .starSep("arguments", Expression, Leaf("PuncComma")) //
-        .req("_", Leaf("PuncRoundClose")).cut("Expected a `)` to finish a method call") //
+        .req("_", LeafPuncDot) //
+        .req("m_name", LeafIden) //
+        .opt("bang", LeafPuncBang) //
+        .req("_", LeafPuncRoundOpen) //
+        .starSep("arguments", Expression, LeafPuncComma) //
+        .req("_", LeafPuncRoundClose).cut("Expected a `)` to finish a method call") //
         .seq(@This());
     location: Location,
 };
 
 pub const FieldAccess = struct {
-    f_name: Leaf("Iden"),
+    f_name: LeafIden,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("PuncDot")) //
-        .req("f_name", Leaf("Iden")) //
+        .req("_", LeafPuncDot) //
+        .req("f_name", LeafIden) //
         .seq(@This());
     location: Location,
 };
 
 pub const ExprBase = union(enum) {
     Parenthesized: *const ParenExpr,
-    ThisLiteral: *const Leaf("KeyThis"),
-    TrueLiteral: *const Leaf("KeyTrue"),
-    FalseLiteral: *const Leaf("KeyFalse"),
-    IntLiteral: *const Leaf("IntLiteral"),
-    StringLiteral: *const Leaf("StringLiteral"),
-    ReturnLiteral: *const Leaf("KeyReturn"),
+    ThisLiteral: *const LeafKeyThis,
+    TrueLiteral: *const LeafKeyTrue,
+    FalseLiteral: *const LeafKeyFalse,
+    IntLiteral: *const LeafIntLiteral,
+    StringLiteral: *const LeafStringLiteral,
+    ReturnLiteral: *const LeafKeyReturn,
     StaticCall: *const StaticCallExpr,
     NewExpr: *const NewExpr,
-    Variable: *const Leaf("Iden"),
+    Variable: *const LeafIden,
 
     pub const Parser = comb.ChoiceParser(@This());
 };
@@ -1212,26 +1263,26 @@ pub const ParenExpr = struct {
     expression: Expression,
 
     pub const Parser = comb.fluent //
-        .req("_", Leaf("PuncRoundOpen")) //
+        .req("_", LeafPuncRoundOpen) //
         .req("expression", Expression).cut("Expected an expression after `(`") //
-        .req("_", Leaf("PuncRoundClose")).cut("Expected a `)` to finish a parenthesized expression") //
+        .req("_", LeafPuncRoundClose).cut("Expected a `)` to finish a parenthesized expression") //
         .seq(@This());
     location: Location,
 };
 
 pub const StaticCallExpr = struct {
     base: Type,
-    f_name: Leaf("Iden"),
-    bang: ?*const Leaf("PuncBang"),
+    f_name: LeafIden,
+    bang: ?*const LeafPuncBang,
     arguments: []const Expression,
     pub const Parser = comb.fluent //
         .req("base", Type) //
-        .req("_", Leaf("PuncDot")) //
-        .req("f_name", Leaf("Iden")).cut("Expected a function's name after `.`") //
-        .opt("bang", Leaf("PuncBang")) //
-        .req("_", Leaf("PuncRoundOpen")).cut("Expected a `(` to begin an argument list") //
-        .starSep("arguments", Expression, Leaf("PuncComma")) //
-        .req("_", Leaf("PuncRoundClose")).cut("Expected a `)` to finish an argument list") //
+        .req("_", LeafPuncDot) //
+        .req("f_name", LeafIden).cut("Expected a function's name after `.`") //
+        .opt("bang", LeafPuncBang) //
+        .req("_", LeafPuncRoundOpen).cut("Expected a `(` to begin an argument list") //
+        .starSep("arguments", Expression, LeafPuncComma) //
+        .req("_", LeafPuncRoundClose).cut("Expected a `)` to finish an argument list") //
         .seq(@This());
     location: Location,
 };
@@ -1239,20 +1290,20 @@ pub const StaticCallExpr = struct {
 pub const NewExpr = struct {
     arguments: []const NamedArgument,
     pub const Parser = comb.fluent //
-        .req("_", Leaf("KeyNew")) //
-        .req("_", Leaf("PuncRoundOpen")).cut("Expected a `(` after `new`") //
-        .starSep("arguments", NamedArgument, Leaf("PuncComma")) //
-        .req("_", Leaf("PuncRoundClose")).cut("Expected a `)` to finish a new-expression") //
+        .req("_", LeafKeyNew) //
+        .req("_", LeafPuncRoundOpen).cut("Expected a `(` after `new`") //
+        .starSep("arguments", NamedArgument, LeafPuncComma) //
+        .req("_", LeafPuncRoundClose).cut("Expected a `)` to finish a new-expression") //
         .seq(@This());
     location: Location,
 };
 
 pub const NamedArgument = struct {
-    name: Leaf("Iden"),
+    name: LeafIden,
     value: Expression,
     pub const Parser = comb.fluent //
-        .req("name", Leaf("Iden")) //
-        .req("_", Leaf("PuncAssign")).cut("Expected an `=` after an argument name") //
+        .req("name", LeafIden) //
+        .req("_", LeafPuncAssign).cut("Expected an `=` after an argument name") //
         .req("value", Expression).cut("Expected a value after `=`") //
         .seq(@This());
     location: Location,
@@ -1267,12 +1318,12 @@ test "Parse simple variable declaration statement" {
     };
 
     var compile_error: ErrorMessage = undefined;
-    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
-    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
+    var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
 
-    var block = Block.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
+    var block = Block.Parser.parse(std.testing.allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
-            try compile_error.render(try std.io.getStdErr(), "");
+            try compile_error.render(std.io.getStdErr(), "");
             unreachable;
         },
         else => unreachable,
@@ -1292,12 +1343,12 @@ test "Parse simple method" {
     };
 
     var compile_error: ErrorMessage = undefined;
-    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
-    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
+    var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
 
-    var fn_def = FunctionDef.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
+    var fn_def = FunctionDef.Parser.parse(std.testing.allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
-            try compile_error.render(try std.io.getStdErr(), "");
+            try compile_error.render(std.io.getStdErr(), "");
             unreachable;
         },
         else => unreachable,
@@ -1311,12 +1362,12 @@ test "Parse program" {
     };
 
     var compile_error: ErrorMessage = undefined;
-    var identifier_pool = IdentifierPool.init(std.debug.global_allocator);
-    const stream = try tokenize(std.debug.global_allocator, &identifier_pool, &blob, &compile_error);
+    var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
 
-    var source = Source.Parser.parse(std.debug.global_allocator, stream, &compile_error) catch |err| switch (err) {
+    var source = Source.Parser.parse(std.testing.allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
-            try compile_error.render(try std.io.getStdErr(), "");
+            try compile_error.render(std.io.getStdErr(), "");
             unreachable;
         },
         else => unreachable,

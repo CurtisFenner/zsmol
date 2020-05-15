@@ -27,12 +27,12 @@ pub fn NibbleTrie(comptime Value: type) type {
 
             pub fn next(self: *ValueIterator) ?Value {
                 while (true) {
-                    if (self.index >= self.trie.blocks.count()) {
+                    if (self.index >= self.trie.blocks.items.len) {
                         return null;
                     }
                     const at = self.index;
                     self.index += 1;
-                    if (self.trie.blocks.toSlice()[at].value) |v| {
+                    if (self.trie.blocks.items[at].value) |v| {
                         return v;
                     }
                 }
@@ -61,35 +61,35 @@ pub fn NibbleTrie(comptime Value: type) type {
         /// Puts a value into the trie, replacing any value that was previously
         /// present.
         pub fn put(self: *Self, key: var, value: Value) !void {
-            if (self.blocks.count() == 0) {
+            if (self.blocks.items.len == 0) {
                 try self.blocks.append(Block.empty());
             }
             var index: usize = 0;
             while (key.next()) |nibble| {
-                var block: *Block = &self.blocks.toSlice()[index];
+                var block: *Block = &self.blocks.items[index];
                 if (block.branches[nibble]) |next_index| {
                     index = next_index;
                 } else {
                     try self.blocks.append(Block.empty());
-                    block = &self.blocks.toSlice()[index];
-                    const new_index = self.blocks.count() - 1;
+                    block = &self.blocks.items[index];
+                    const new_index = self.blocks.items.len - 1;
                     block.branches[nibble] = new_index;
                     index = new_index;
                 }
             }
-            var block = &self.blocks.toSlice()[index];
+            var block = &self.blocks.items[index];
             block.value = value;
         }
 
         /// Gets the most recently put value associated with the key.
         pub fn get(self: *const Self, key: var) ?*Value {
-            if (self.blocks.count() == 0) {
+            if (self.blocks.items.len == 0) {
                 return null;
             }
 
             var index: usize = 0;
             while (key.next()) |nibble| {
-                const block = self.blocks.toSlice()[index];
+                const block = self.blocks.items[index];
                 if (block.branches[nibble]) |next_index| {
                     index = next_index;
                 } else {
@@ -97,7 +97,7 @@ pub fn NibbleTrie(comptime Value: type) type {
                 }
             }
 
-            if (self.blocks.toSlice()[index].value) |*value| {
+            if (self.blocks.items[index].value) |*value| {
                 return value;
             } else {
                 return null;

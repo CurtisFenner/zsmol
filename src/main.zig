@@ -12,7 +12,7 @@ const IdentifierPool = @import("identifiers.zig").IdentifierPool;
 const std_core_file = @embedFile("standard/core.smol");
 
 fn blobFromFile(allocator: *std.mem.Allocator, file_name: []const u8) !*grammar.Blob {
-    const source_file = try std.fs.File.openRead(file_name);
+    const source_file = try std.fs.cwd().openFile(file_name, .{ .read = true });
     defer source_file.close();
 
     const block_size = 24;
@@ -30,7 +30,7 @@ fn blobFromFile(allocator: *std.mem.Allocator, file_name: []const u8) !*grammar.
     }
 
     var content = try allocator.alloc(u8, size);
-    for (blocks.toSlice()) |block, i| {
+    for (blocks.items) |block, i| {
         var to = std.math.min(size, block_size * (i + 1));
         var len = to - block_size * i;
         std.mem.copy(u8, content[block_size * i .. to], block[0..len]);
@@ -86,7 +86,7 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
 
     var sources = std.ArrayList(grammar.Source).init(allocator);
     defer sources.deinit();
-    const stderr_file = try std.io.getStdErr();
+    const stderr_file = std.io.getStdErr();
     var error_message: grammar.ErrorMessage = undefined;
 
     // Parse the standard library.
@@ -118,10 +118,10 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
     }
 
     const program = semantics.semantics(allocator, &identifier_pool, sources.toOwnedSlice(), &error_message) catch |err| switch (err) {
-        error.CompileError => {
-            try error_message.render(stderr_file, args.find("diagnostic-base"));
-            return 40;
-        },
+        // error.CompileError => {
+        //     try error_message.render(stderr_file, args.find("diagnostic-base"));
+        //     return 40;
+        // },
         else => return err,
     };
 
@@ -130,20 +130,20 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
 }
 
 pub fn printUsage() !void {
-    const stderr = try std.io.getStdErr();
-    try stderr.write("\n\tUSAGE:");
-    try stderr.write("\tzsmol interpret [file1.smol] [file2.smol] [.....]\n");
+    const stderr = std.io.getStdErr();
+    try stderr.writeAll("\n\tUSAGE:");
+    try stderr.writeAll("\tzsmol interpret [file1.smol] [file2.smol] [.....]\n");
 }
 
 pub fn main() !u8 {
-    var arena = std.heap.ArenaAllocator.init(std.heap.direct_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = &arena.allocator;
 
     const args = try std.process.argsAlloc(allocator);
-    const stderr_file = try std.io.getStdErr();
+    const stderr_file = std.io.getStdErr();
     if (args.len < 3) {
-        try stderr_file.write("Expected at least three arguments\n");
+        try stderr_file.writeAll("Expected at least three arguments\n");
         try printUsage();
         return @intCast(u8, 1);
     }
@@ -152,7 +152,7 @@ pub fn main() !u8 {
         return mainInterpret(allocator, args[2..]);
     }
 
-    try stderr_file.write("Unknown compiler command.\n");
+    try stderr_file.writeAll("Unknown compiler command.\n");
     try printUsage();
     return @intCast(u8, 1);
 }

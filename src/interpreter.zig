@@ -187,7 +187,7 @@ pub const Interpreter = struct {
     }
 
     fn workOp(interpreter: *Interpreter) !usize {
-        const frame_count = interpreter._stack.count();
+        const frame_count = interpreter._stack.items.len;
         assert(frame_count != 0);
 
         const frame = &interpreter._stack.toSlice()[frame_count - 1];
@@ -329,7 +329,7 @@ test "Interpret identity program" {
         .main = ir.FunctionID{ .id = 0 },
         .arguments = [_]Value{Value{ .I64 = 1337 }},
     };
-    var ip = try Interpreter.init(std.debug.global_allocator, program, invocation);
+    var ip = try Interpreter.init(std.testing.allocator, program, invocation);
     var result = (try ip.work(1024)) orelse unreachable;
     assert(result.len == 1);
     assert(result[0].I64 == 1337);
@@ -359,7 +359,7 @@ test "Interpret `return 1234`" {
         .main = ir.FunctionID{ .id = 0 },
         .arguments = [_]Value{},
     };
-    var ip = try Interpreter.init(std.debug.global_allocator, program, invocation);
+    var ip = try Interpreter.init(std.testing.allocator, program, invocation);
     var result = (try ip.work(1024)) orelse unreachable;
     assert(result.len == 1);
     assert(result[0].I64 == 1234);
@@ -403,7 +403,7 @@ test "Interpret `if(arg){x=111}else{x=222}; return x;`" {
         .main = ir.FunctionID{ .id = 0 },
         .arguments = [_]Value{Value{ .Boolean = false }},
     };
-    var ipFalse = try Interpreter.init(std.debug.global_allocator, program, invocationFalse);
+    var ipFalse = try Interpreter.init(std.testing.allocator, program, invocationFalse);
     var resultFalse = (try ipFalse.work(1024)) orelse unreachable;
     assert(resultFalse.len == 1);
     assert(resultFalse[0].I64 == 222);
@@ -412,7 +412,7 @@ test "Interpret `if(arg){x=111}else{x=222}; return x;`" {
         .main = ir.FunctionID{ .id = 0 },
         .arguments = [_]Value{Value{ .Boolean = true }},
     };
-    var ipTrue = try Interpreter.init(std.debug.global_allocator, program, invocationTrue);
+    var ipTrue = try Interpreter.init(std.testing.allocator, program, invocationTrue);
     var resultTrue = (try ipTrue.work(1024)) orelse unreachable;
     assert(resultTrue.len == 1);
     assert(resultTrue[0].I64 == 111);
@@ -461,7 +461,7 @@ test "Interpret `if(arg){return 111}else{return 222}`" {
         .main = ir.FunctionID{ .id = 0 },
         .arguments = [_]Value{Value{ .Boolean = false }},
     };
-    var ipFalse = try Interpreter.init(std.debug.global_allocator, program, invocationFalse);
+    var ipFalse = try Interpreter.init(std.testing.allocator, program, invocationFalse);
     var resultFalse = (try ipFalse.work(1024)) orelse unreachable;
     assert(resultFalse.len == 1);
     assert(resultFalse[0].I64 == 222);
@@ -470,7 +470,7 @@ test "Interpret `if(arg){return 111}else{return 222}`" {
         .main = ir.FunctionID{ .id = 0 },
         .arguments = [_]Value{Value{ .Boolean = true }},
     };
-    var ipTrue = try Interpreter.init(std.debug.global_allocator, program, invocationTrue);
+    var ipTrue = try Interpreter.init(std.testing.allocator, program, invocationTrue);
     var resultTrue = (try ipTrue.work(1024)) orelse unreachable;
     assert(resultTrue.len == 1);
     assert(resultTrue[0].I64 == 111);
@@ -512,7 +512,7 @@ test "Interpret `if(arg){}else{}return 333;`" {
         .main = ir.FunctionID{ .id = 0 },
         .arguments = [_]Value{Value{ .Boolean = false }},
     };
-    var ipFalse = try Interpreter.init(std.debug.global_allocator, program, invocationFalse);
+    var ipFalse = try Interpreter.init(std.testing.allocator, program, invocationFalse);
     var resultFalse = (try ipFalse.work(1024)) orelse unreachable;
     assert(resultFalse.len == 1);
     assert(resultFalse[0].I64 == 333);
@@ -521,7 +521,7 @@ test "Interpret `if(arg){}else{}return 333;`" {
         .main = ir.FunctionID{ .id = 0 },
         .arguments = [_]Value{Value{ .Boolean = true }},
     };
-    var ipTrue = try Interpreter.init(std.debug.global_allocator, program, invocationTrue);
+    var ipTrue = try Interpreter.init(std.testing.allocator, program, invocationTrue);
     var resultTrue = (try ipTrue.work(1024)) orelse unreachable;
     assert(resultTrue.len == 1);
     assert(resultTrue[0].I64 == 333);
@@ -583,7 +583,7 @@ test "Interpret `r=new(11,22,33); return r.0,r.1,r.2`" {
         .main = ir.FunctionID{ .id = 0 },
         .arguments = [_]Value{},
     };
-    var ip = try Interpreter.init(std.debug.global_allocator, program, invocation);
+    var ip = try Interpreter.init(std.testing.allocator, program, invocation);
     var result = (try ip.work(1024)) orelse unreachable;
     assert(result.len == 3);
     assert(result[0].I64 == 11);

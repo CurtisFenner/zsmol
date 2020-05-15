@@ -15,7 +15,7 @@ pub const IdentifierPool = struct {
         if (self.pool.get(string)) |id| {
             return Identifier{ .pool = self, .id = id.* };
         } else {
-            const vended = @intCast(u32, self.sources.count());
+            const vended = @intCast(u32, self.sources.items.len);
             try self.pool.put(string, vended);
             try self.sources.append(string);
             return Identifier{ .pool = self, .id = vended };
