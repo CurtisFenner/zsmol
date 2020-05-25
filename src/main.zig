@@ -118,10 +118,10 @@ pub fn mainInterpret(allocator: *std.mem.Allocator, command_args: []const []cons
     }
 
     const program = semantics.semantics(allocator, &identifier_pool, sources.toOwnedSlice(), &error_message) catch |err| switch (err) {
-        // error.CompileError => {
-        //     try error_message.render(stderr_file, args.find("diagnostic-base"));
-        //     return 40;
-        // },
+        error.CompileError => {
+            try error_message.render(stderr_file, args.find("diagnostic-base"));
+            return 40;
+        },
         else => return err,
     };
 
@@ -155,4 +155,13 @@ pub fn main() !u8 {
     try stderr_file.writeAll("Unknown compiler command.\n");
     try printUsage();
     return @intCast(u8, 1);
+}
+
+test "try files" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = &arena.allocator;
+
+    var args = [_][]const u8{"C:\\Users\\Curtis\\Desktop\\zsmol\\tests\\negative\\scope\\define-class-twice\\test.smol"};
+    assert(40 == try mainInterpret(allocator, &args));
 }

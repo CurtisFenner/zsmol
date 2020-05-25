@@ -172,7 +172,7 @@ const MaxHeapTest = struct {
         return a < b;
     }
 
-    fn check(self: MaxHeapTest, heap: *Heap) void {
+    fn check(self: *MaxHeapTest, heap: *Heap) void {
         // Check notifications.
         var count: usize = 0;
         for (self.locations) |cloc, n| {
@@ -193,13 +193,13 @@ const MaxHeapTest = struct {
         for (heap.items[0..heap.size]) |item, i| {
             if (i == 0) continue;
             var parent = (i - 1) / 2;
-            if (smaller(undefined, heap.items[parent], heap.items[i])) {
+            if (smaller(self, heap.items[parent], heap.items[i])) {
                 std.debug.warn("\n\nHEAP INVARIANT VIOLATION:\n", .{});
                 std.debug.warn("\titems[{}] = {}\n", .{ i, heap.items[i] });
                 std.debug.warn("\titems[{}] = {}\n", .{ parent, heap.items[parent] });
                 assert(false);
             }
-            assert(!smaller(undefined, heap.items[parent], heap.items[i]));
+            assert(!smaller(self, heap.items[parent], heap.items[i]));
         }
     }
 

@@ -40,11 +40,10 @@ pub const Location = struct {
     /// `"filename:startline:startcol-endline:endcol"` to the given file.
     /// For example, `"dir/file.txt:10:15-10:20"`.
     pub fn printPosition(location: Location, file: var, diagnostic_base: ?[]const u8) !void {
-        var start_line: usize = undefined;
-        var start_column: usize = undefined;
+        var start_line: usize = 0;
+        var start_column: usize = 0;
         var end_line: usize = 1;
         var end_column: usize = 1;
-
         for (location.blob.content) |c, i| {
             if (i == location.begin) {
                 start_line = end_line;
@@ -73,9 +72,8 @@ pub const Location = struct {
         }
         try file.writeAll(":");
         var buffer = [_]u8{0} ** 32;
-        var width: usize = undefined;
         const format = std.fmt.FormatOptions{};
-        width = std.fmt.formatIntBuf(&buffer, start_line, 10, false, format);
+        var width = std.fmt.formatIntBuf(&buffer, start_line, 10, false, format);
         try file.writeAll(buffer[0..width]);
         try file.writeAll(":");
         width = std.fmt.formatIntBuf(&buffer, start_column, 10, false, format);
@@ -200,11 +198,12 @@ pub const ErrorMessage = struct {
         AtLocation: Location,
     };
 
-    entries: []const Entry,
+    entry_count: usize,
+    entries_storage: [64]Entry = undefined,
 
     pub fn render(e: ErrorMessage, file: var, diagnostic_base: ?[]const u8) !void {
         try file.writeAll("ERROR:\n");
-        for (e.entries) |entry, i| {
+        for (e.entries_storage[0..e.entry_count]) |entry, i| {
             switch (entry) {
                 .Text => |t| try file.writeAll(t),
                 .AtLocation => |loc| {
@@ -212,24 +211,33 @@ pub const ErrorMessage = struct {
                     try loc.printPosition(file, diagnostic_base);
                     try file.writeAll(":\n");
                     try loc.printExcerpt(file);
-                    if (i + 1 != e.entries.len) try file.writeAll("\n");
+                    if (i + 1 != e.entry_count) try file.writeAll("\n");
                 },
             }
         }
     }
+
+    pub fn make(entries: []const ErrorMessage.Entry) ErrorMessage {
+        var self = ErrorMessage{ .entry_count = entries.len };
+        assert(entries.len < self.entries_storage.len);
+        std.mem.copy(ErrorMessage.Entry, &self.entries_storage, entries);
+        return self;
+    }
 };
 
-pub fn makeParseError(allocator: *std.mem.Allocator, location: Location, cut_message: []const u8) !ErrorMessage {
-    var entries = try allocator.alloc(ErrorMessage.Entry, 2);
-    entries[0] = ErrorMessage.Entry{ .Text = cut_message };
-    entries[1] = ErrorMessage.Entry{ .AtLocation = location };
-    return ErrorMessage{ .entries = entries };
+pub fn makeParseError(location: Location, cut_message: []const u8) ErrorMessage {
+    var e = ErrorMessage{ .entry_count = 2 };
+    e.entries_storage[0] = ErrorMessage.Entry{ .Text = cut_message };
+    e.entries_storage[1] = ErrorMessage.Entry{ .AtLocation = location };
+    return e;
 }
 
 pub fn Combinators(comptime Token: type) type {
     return struct {
         /// A Stream represents a tokenized text source.
         pub const Stream = struct {
+            allocator: *std.mem.Allocator,
+
             /// The tokens in the stream.
             tokens: []const Token,
 
@@ -237,6 +245,14 @@ pub fn Combinators(comptime Token: type) type {
             /// locations.len == tokens.len + 1. The final Location is the
             /// "end of file".
             locations: []const Location,
+
+            fn deinit(self: Stream) void {
+                self.allocator.free(self.locations);
+                for (self.tokens) |token| {
+                    token.deinit(self.allocator);
+                }
+                self.allocator.free(self.tokens);
+            }
         };
 
         /// Represents a field in a sequence AST or a variant in a sum AST.
@@ -532,10 +548,9 @@ pub fn Combinators(comptime Token: type) type {
                     const ru = try @This()._parse(allocator, stream, 0);
                     switch (ru) {
                         .NoMatch => {
-                            var entries = try allocator.alloc(ErrorMessage.Entry, 2);
-                            entries[0] = ErrorMessage.Entry{ .Text = "Expected " ++ @typeName(Into) };
-                            entries[1] = ErrorMessage.Entry{ .AtLocation = stream.locations[0] };
-                            parse_error.* = ErrorMessage{ .entries = entries };
+                            parse_error.* = ErrorMessage{ .entry_count = 2 };
+                            parse_error.*.entries_storage[0] = ErrorMessage.Entry{ .Text = "Expected " ++ @typeName(Into) };
+                            parse_error.*.entries_storage[1] = ErrorMessage.Entry{ .AtLocation = stream.locations[0] };
                             return error.ParseError;
                         },
                         .Error => |e| {
@@ -544,10 +559,10 @@ pub fn Combinators(comptime Token: type) type {
                         },
                         .Result => |result| {
                             if (result.consumed != stream.tokens.len) {
-                                var entries = try allocator.alloc(ErrorMessage.Entry, 2);
-                                entries[0] = ErrorMessage.Entry{ .Text = "Unexpected end to " ++ @typeName(Into) };
-                                entries[1] = ErrorMessage.Entry{ .AtLocation = stream.locations[result.consumed] };
-                                parse_error.* = ErrorMessage{ .entries = entries };
+                                parse_error.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                                    ErrorMessage.Entry{ .Text = "Unexpected end to " ++ @typeName(Into) },
+                                    ErrorMessage.Entry{ .AtLocation = stream.locations[result.consumed] },
+                                });
                                 return error.ParseError;
                             }
                             return result.value;
@@ -603,10 +618,12 @@ pub fn Combinators(comptime Token: type) type {
                     var enough = list.items.len >= field.min_take_count;
                     if (!enough) {
                         if (field.cut_message) |cut_message| {
-                            var entries = try allocator.alloc(ErrorMessage.Entry, 2);
-                            entries[0] = ErrorMessage.Entry{ .Text = cut_message };
-                            entries[1] = ErrorMessage.Entry{ .AtLocation = stream.locations[from + consumed.*] };
-                            return FieldResultUnion{ .Error = ErrorMessage{ .entries = entries } };
+                            return FieldResultUnion{
+                                .Error = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                                    ErrorMessage.Entry{ .Text = cut_message },
+                                    ErrorMessage.Entry{ .Text = cut_message },
+                                }),
+                            };
                         }
                         return FieldResultUnion{ .Fail = {} };
                     }
@@ -701,6 +718,7 @@ test "Separator" {
     };
 
     const stream = comb.Stream{
+        .allocator = undefined,
         .tokens = &[_]Token{Token{ .A = {} }},
         .locations = &[_]Location{ undefined, undefined },
     };
@@ -738,7 +756,11 @@ test "Lisp" {
                 }
             }
             try locations.append(Location{ .blob = blob, .begin = blob.content.len, .end = blob.content.len });
-            return comb.Stream{ .tokens = tokens.toOwnedSlice(), .locations = locations.toOwnedSlice() };
+            return comb.Stream{
+                .allocator = allocator,
+                .tokens = tokens.toOwnedSlice(),
+                .locations = locations.toOwnedSlice(),
+            };
         }
     };
 

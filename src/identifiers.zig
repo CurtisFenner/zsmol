@@ -52,7 +52,7 @@ pub const Identifier = struct {
     }
 
     pub fn string(self: *const Identifier) []const u8 {
-        return self.pool.sources.toSlice()[self.id];
+        return self.pool.sources.items[self.id];
     }
 };
 

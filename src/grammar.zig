@@ -113,6 +113,15 @@ pub const Token = union(enum) {
     PuncSquareClose: void,
     PuncCurlyOpen: void,
     PuncCurlyClose: void,
+
+    fn deinit(self: Token, allocator: *std.mem.Allocator) void {
+        switch (self) {
+            .StringLiteral => |sl| {
+                allocator.free(sl);
+            },
+            else => {},
+        }
+    }
 };
 
 const KeywordPattern = struct {
@@ -301,12 +310,12 @@ const uppercase_class = CharacterClass.fromRange('A', 'Z');
 const digit_class = CharacterClass.fromRange('0', '9');
 const identifier_class = lowercase_class.sum(uppercase_class).sum(digit_class);
 
-fn parseTypeVariable(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
+fn parseTypeVariable(identifier_pool: *IdentifierPool, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
     const stop = identifier_class.match(blob.content[from + 1 ..]);
     const name = blob.content[from + 1 .. from + 1 + stop];
     if (stop == 0 or !uppercase_class.contains(name[0])) {
         const location = Location{ .blob = blob, .begin = from, .end = from + 1 };
-        compile_error.* = try parser.makeParseError(allocator, location, "Malformed type variable");
+        compile_error.* = parser.makeParseError(location, "Malformed type variable");
     }
 
     const token = if (std.mem.eql(u8, "Self", name)) Token{ .TypeSelf = {} } else Token{ .TypeVar = try identifier_pool.add(name) };
@@ -316,7 +325,7 @@ fn parseTypeVariable(allocator: *std.mem.Allocator, identifier_pool: *Identifier
     };
 }
 
-fn parseIntLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
+fn parseIntLiteral(blob: *const parser.Blob, from: usize, compile_error: *ErrorMessage) !TokenizeResult {
     const lowercase = CharacterClass.fromRange('a', 'z');
     const uppercase = CharacterClass.fromRange('A', 'Z');
     const digits = CharacterClass.fromRange('0', '9');
@@ -331,7 +340,7 @@ fn parseIntLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, from
     const value = std.fmt.parseInt(i64, blob.content[from .. from + stop], 10) catch |err| switch (err) {
         error.Overflow, error.InvalidCharacter => {
             const location = Location{ .blob = blob, .begin = from, .end = from + stop };
-            compile_error.* = try parser.makeParseError(allocator, location, "Malformed number literal");
+            compile_error.* = parser.makeParseError(location, "Malformed number literal");
             return error.ParseError;
         },
     };
@@ -350,16 +359,16 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
     var escaped: bool = false;
     while (true) {
         if (from + i == blob.content.len or blob.content[from + i] == '\n') {
-            var entries = try allocator.alloc(ErrorMessage.Entry, 2);
-            entries[0] = ErrorMessage.Entry{ .Text = "Unfinished string literal" };
-            entries[1] = ErrorMessage.Entry{
-                .AtLocation = Location{
-                    .blob = blob,
-                    .begin = from,
-                    .end = from + i,
+            compile_error.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                .{ .Text = "Unfinished string literal" },
+                .{
+                    .AtLocation = Location{
+                        .blob = blob,
+                        .begin = from,
+                        .end = from + i,
+                    },
                 },
-            };
-            compile_error.* = ErrorMessage{ .entries = entries };
+            });
             return error.ParseError;
         }
 
@@ -372,16 +381,16 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
             } else if (at == '"') {
                 try storage.append('"');
             } else {
-                var entries = try allocator.alloc(ErrorMessage.Entry, 2);
-                entries[0] = ErrorMessage.Entry{ .Text = "Invalid escape sequence used" };
-                entries[1] = ErrorMessage.Entry{
-                    .AtLocation = Location{
-                        .blob = blob,
-                        .begin = from + i - 1,
-                        .end = from + i + 1,
+                compile_error.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                    .{ .Text = "Invalid escape sequence used" },
+                    .{
+                        .AtLocation = Location{
+                            .blob = blob,
+                            .begin = from + i - 1,
+                            .end = from + i + 1,
+                        },
                     },
-                };
-                compile_error.* = ErrorMessage{ .entries = entries };
+                });
                 return error.ParseError;
             }
             escaped = false;
@@ -396,16 +405,17 @@ fn parseStringLiteral(allocator: *std.mem.Allocator, blob: *const parser.Blob, f
             } else if (32 <= at and at <= 127) {
                 try storage.append(at);
             } else {
-                // TODO: Support UTF-8 encoded literals
-                var entries = try allocator.alloc(ErrorMessage.Entry, 2);
-                entries[0] = ErrorMessage.Entry{ .Text = "Invalid string literal byte" };
-                entries[1] = ErrorMessage.Entry{
-                    .AtLocation = Location{
-                        .blob = blob,
-                        .begin = from + i,
-                        .end = from + i + 1,
+                compile_error.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                    .{ .Text = "Invalid string literal byte" },
+                    .{
+                        .AtLocation = Location{
+                            .blob = blob,
+                            .begin = from + i,
+                            .end = from + i + 1,
+                        },
                     },
-                };
+                });
+                return error.ParseError;
             }
         }
 
@@ -453,10 +463,10 @@ fn parseToken(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, b
             const comment_end = comment_body_class.match(blob.content[from + 2 ..]);
             return TokenizeResult{ .consumed = 2 + comment_end, .token = null };
         } else if (matching > 2) {
-            var entries = try allocator.alloc(ErrorMessage.Entry, 2);
-            entries[0] = ErrorMessage.Entry{ .Text = "Unknown operator" };
-            entries[1] = ErrorMessage.Entry{ .AtLocation = Location{ .blob = blob, .begin = from, .end = from + matching } };
-            compile_error.* = ErrorMessage{ .entries = entries };
+            compile_error.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                .{ .Text = "Unknown operator" },
+                .{ .AtLocation = Location{ .blob = blob, .begin = from, .end = from + matching } },
+            });
             return error.ParseError;
         }
         const op = blob.content[from .. from + matching];
@@ -464,23 +474,23 @@ fn parseToken(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, b
             return TokenizeResult{ .consumed = op.len, .token = op_token };
         }
     } else if ('0' <= at and at <= '9') {
-        return parseIntLiteral(allocator, blob, from, compile_error);
+        return parseIntLiteral(blob, from, compile_error);
     } else if ('#' == at) {
-        return parseTypeVariable(allocator, identifier_pool, blob, from, compile_error);
+        return parseTypeVariable(identifier_pool, blob, from, compile_error);
     } else if (at == '"') {
         return parseStringLiteral(allocator, blob, from, compile_error);
     }
 
-    var entries = try allocator.alloc(ErrorMessage.Entry, 2);
-    entries[0] = ErrorMessage.Entry{ .Text = "Unrecognized token" };
-    entries[1] = ErrorMessage.Entry{
-        .AtLocation = Location{
-            .blob = blob,
-            .begin = from,
-            .end = from + 1,
+    compile_error.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+        .{ .Text = "Unrecognized token" },
+        .{
+            .AtLocation = Location{
+                .blob = blob,
+                .begin = from,
+                .end = from + 1,
+            },
         },
-    };
-    compile_error.* = ErrorMessage{ .entries = entries };
+    });
     return error.ParseError;
 }
 
@@ -513,6 +523,7 @@ pub fn tokenize(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool,
     });
 
     return comb.Stream{
+        .allocator = allocator,
         .tokens = tokens.toOwnedSlice(),
         .locations = locations.toOwnedSlice(),
     };
@@ -525,7 +536,9 @@ test "Tokenize `alpha`" {
     };
     var compile_error: ErrorMessage = undefined;
     var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    defer identifier_pool.deinit();
     const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
+    defer stream.deinit();
     assert(stream.tokens.len == 1);
     assert(stream.locations.len == 2);
     assert(stream.locations[0].begin == 0);
@@ -542,7 +555,9 @@ test "Tokenize `alpha.beta`" {
     };
     var compile_error: ErrorMessage = undefined;
     var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    defer identifier_pool.deinit();
     const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
+    defer stream.deinit();
     assert(stream.tokens.len == 3);
     assert(stream.locations.len == 4);
     assert(stream.locations[0].begin == 0);
@@ -568,7 +583,9 @@ test "Tokenize `if`" {
     };
     var compile_error: ErrorMessage = undefined;
     var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    defer identifier_pool.deinit();
     const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
+    defer stream.deinit();
     assert(stream.tokens.len == 1);
     assert(stream.locations.len == 2);
     assert(stream.locations[0].begin == 0);
@@ -1319,9 +1336,13 @@ test "Parse simple variable declaration statement" {
 
     var compile_error: ErrorMessage = undefined;
     var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    defer identifier_pool.deinit();
     const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
+    defer stream.deinit();
 
-    var block = Block.Parser.parse(std.testing.allocator, stream, &compile_error) catch |err| switch (err) {
+    var ast_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ast_arena.deinit();
+    var block = Block.Parser.parse(&ast_arena.allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
             try compile_error.render(std.io.getStdErr(), "");
             unreachable;
@@ -1344,9 +1365,13 @@ test "Parse simple method" {
 
     var compile_error: ErrorMessage = undefined;
     var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    defer identifier_pool.deinit();
     const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
+    defer stream.deinit();
 
-    var fn_def = FunctionDef.Parser.parse(std.testing.allocator, stream, &compile_error) catch |err| switch (err) {
+    var ast_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ast_arena.deinit();
+    var fn_def = FunctionDef.Parser.parse(&ast_arena.allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
             try compile_error.render(std.io.getStdErr(), "");
             unreachable;
@@ -1363,9 +1388,13 @@ test "Parse program" {
 
     var compile_error: ErrorMessage = undefined;
     var identifier_pool = IdentifierPool.init(std.testing.allocator);
+    defer identifier_pool.deinit();
     const stream = try tokenize(std.testing.allocator, &identifier_pool, &blob, &compile_error);
+    defer stream.deinit();
 
-    var source = Source.Parser.parse(std.testing.allocator, stream, &compile_error) catch |err| switch (err) {
+    var ast_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ast_arena.deinit();
+    var source = Source.Parser.parse(&ast_arena.allocator, stream, &compile_error) catch |err| switch (err) {
         error.ParseError => |m| {
             try compile_error.render(std.io.getStdErr(), "");
             unreachable;
