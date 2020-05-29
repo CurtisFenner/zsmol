@@ -315,7 +315,11 @@ fn parseTypeVariable(identifier_pool: *IdentifierPool, blob: *const parser.Blob,
     const name = blob.content[from + 1 .. from + 1 + stop];
     if (stop == 0 or !uppercase_class.contains(name[0])) {
         const location = Location{ .blob = blob, .begin = from, .end = from + 1 };
-        compile_error.* = parser.makeParseError(location, "Malformed type variable");
+        compile_error.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+            .{ .Text = "Malformed type variable" },
+            .{ .AtLocation = location },
+        });
+        return error.ParseError;
     }
 
     const token = if (std.mem.eql(u8, "Self", name)) Token{ .TypeSelf = {} } else Token{ .TypeVar = try identifier_pool.add(name) };
@@ -340,7 +344,10 @@ fn parseIntLiteral(blob: *const parser.Blob, from: usize, compile_error: *ErrorM
     const value = std.fmt.parseInt(i64, blob.content[from .. from + stop], 10) catch |err| switch (err) {
         error.Overflow, error.InvalidCharacter => {
             const location = Location{ .blob = blob, .begin = from, .end = from + stop };
-            compile_error.* = parser.makeParseError(location, "Malformed number literal");
+            compile_error.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                .{ .Text = "Malformed number literal" },
+                .{ .AtLocation = location },
+            });
             return error.ParseError;
         },
     };

@@ -225,13 +225,6 @@ pub const ErrorMessage = struct {
     }
 };
 
-pub fn makeParseError(location: Location, cut_message: []const u8) ErrorMessage {
-    var e = ErrorMessage{ .entry_count = 2 };
-    e.entries_storage[0] = ErrorMessage.Entry{ .Text = cut_message };
-    e.entries_storage[1] = ErrorMessage.Entry{ .AtLocation = location };
-    return e;
-}
-
 pub fn Combinators(comptime Token: type) type {
     return struct {
         /// A Stream represents a tokenized text source.
@@ -621,7 +614,7 @@ pub fn Combinators(comptime Token: type) type {
                             return FieldResultUnion{
                                 .Error = ErrorMessage.make(&[_]ErrorMessage.Entry{
                                     ErrorMessage.Entry{ .Text = cut_message },
-                                    ErrorMessage.Entry{ .Text = cut_message },
+                                    ErrorMessage.Entry{ .AtLocation = stream.locations[from + consumed.*] },
                                 }),
                             };
                         }

@@ -157,11 +157,20 @@ pub fn main() !u8 {
     return @intCast(u8, 1);
 }
 
-test "try files" {
+test "tests/negative/scope/define-class-twice" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = &arena.allocator;
 
     var args = [_][]const u8{"C:\\Users\\Curtis\\Desktop\\zsmol\\tests\\negative\\scope\\define-class-twice\\test.smol"};
+    assert(40 == try mainInterpret(allocator, &args));
+}
+
+test "tests/negative/syntax/empty-match" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = &arena.allocator;
+
+    var args = [_][]const u8{"C:\\Users\\Curtis\\Desktop\\zsmol\\tests\\negative\\syntax\\empty-match\\test.smol"};
     assert(40 == try mainInterpret(allocator, &args));
 }

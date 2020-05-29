@@ -15,46 +15,68 @@ const Identifier = @import("identifiers.zig").Identifier;
 const IdentifierPool = @import("identifiers.zig").IdentifierPool;
 const IdentifierMap = @import("identifiers.zig").IdentifierMap;
 
-const ErrorBuilder = struct {
-    entries: []ErrorMessage.Entry,
-    offset: usize,
+const ObjectID = union(enum) {
+    ClassID: ClassID,
+    UnionID: UnionID,
+    InterfaceID: InterfaceID,
+};
 
-    fn init(allocator: *std.mem.Allocator) !ErrorBuilder {
-        return ErrorBuilder{
-            .entries = try allocator.alloc(ErrorMessage.Entry, 10),
-            .offset = 0,
-        };
-    }
-
-    fn text(self: *ErrorBuilder, str: []const u8) *ErrorBuilder {
-        self.entries[self.offset] = ErrorMessage.Entry{
-            .Text = str,
-        };
-        self.offset += 1;
-        return self;
-    }
-
-    fn at(self: *ErrorBuilder, location: Location) *ErrorBuilder {
-        self.entries[self.offset] = ErrorMessage.Entry{
-            .AtLocation = location,
-        };
-        self.offset += 1;
-        return self;
-    }
-
-    fn build(self: *const ErrorBuilder) ErrorMessage {
-        // TODO: Can this be freed safely?
-        const out = ErrorMessage{ .entries = self.entries[0..self.offset] };
-        return out;
-    }
+const ObjectBinding = struct {
+    binding_location: Location,
+    object_id: ObjectID,
 };
 
 const WorkingPackage = struct {
     /// The index into the `working_packages` array of `Work`.
     id: usize,
+    package_name: Identifier,
+    work: *Work,
 
-    pub fn init(id: usize) WorkingPackage {
-        return WorkingPackage{ .id = id };
+    objects_by_name: IdentifierMap(ObjectBinding),
+
+    pub fn init(work: *Work, name: Identifier, id: usize) WorkingPackage {
+        return WorkingPackage{
+            .id = id,
+            .package_name = name,
+            .work = work,
+            .objects_by_name = IdentifierMap(ObjectBinding).init(work.allocator, work.pool),
+        };
+    }
+
+    fn defineObject(self: *WorkingPackage, work: *Work, source_id: SourceID, name: Identifier, binding_location: Location, object: ObjectID, error_message: *ErrorMessage) !void {
+        if (self.objects_by_name.get(name)) |existing| {
+            error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                .{ .Text = "The object `" },
+                .{ .Text = self.package_name.string() },
+                .{ .Text = ":" },
+                .{ .Text = name.string() },
+                .{ .Text = "` is defined for a second time" },
+                .{ .AtLocation = binding_location },
+                .{ .Text = "The first definition was" },
+                .{ .AtLocation = existing.binding_location },
+            });
+            return error.CompileError;
+        }
+        try self.objects_by_name.put(name, ObjectBinding{
+            .binding_location = binding_location,
+            .object_id = object,
+        });
+    }
+
+    fn defineClass(self: *WorkingPackage, work: *Work, source_id: SourceID, class_definition: *const grammar.ClassDefinition, error_message: *ErrorMessage) !void {
+        const class_id = ObjectID{
+            .ClassID = try work.addClass(PackageID{ .id = self.id }, source_id, class_definition),
+        };
+        const name_id = class_definition.class_name.value;
+        try self.defineObject(work, source_id, name_id, class_definition.class_name.location, class_id, error_message);
+    }
+
+    fn defineInterface(self: *WorkingPackage, work: *Work, source_id: SourceID, interface_definition: *const grammar.InterfaceDefinition, error_message: *ErrorMessage) !void {
+        const interface_id = ObjectID{
+            .InterfaceID = try work.addInterface(PackageID{ .id = self.id }, source_id, interface_definition),
+        };
+        const name_id = interface_definition.interface_name.value;
+        try self.defineObject(work, source_id, name_id, interface_definition.interface_name.location, interface_id, error_message);
     }
 };
 
@@ -63,9 +85,25 @@ const WorkingClass = struct {
     id: usize,
 
     /// The index of the containing package in the `working_packages` array of `Work`.
-    package_id: usize,
+    package_id: PackageID,
 
-    ast: grammar.ClassDefinition,
+    /// The index of the defining source file.
+    source_id: SourceID,
+
+    ast: *const grammar.ClassDefinition,
+};
+
+const WorkingInterface = struct {
+    /// The index into the `working_interfaces` array of `Work`.
+    id: usize,
+
+    /// The index of the containing package in the `working_packages` array of `Work`.
+    package_id: PackageID,
+
+    /// The index of the defining source file.
+    source_id: SourceID,
+
+    ast: *const grammar.InterfaceDefinition,
 };
 
 const WorkingFunction = struct {
@@ -75,6 +113,10 @@ const WorkingFunction = struct {
     ast: grammar.FunctionDef,
 };
 
+const SourceID = struct { id: usize };
+const ClassID = struct { id: usize };
+const UnionID = struct { id: usize };
+const InterfaceID = struct { id: usize };
 const PackageID = struct { id: usize };
 
 const Work = struct {
@@ -83,12 +125,34 @@ const Work = struct {
 
     working_packages: std.ArrayList(WorkingPackage),
     working_classes: std.ArrayList(WorkingClass),
+    working_interfaces: std.ArrayList(WorkingInterface),
     working_functions: std.ArrayList(WorkingFunction),
 
     package_ids_by_name: IdentifierMap(usize),
 
     fn getPackage(self: *Work, package_id: PackageID) *WorkingPackage {
         return &self.working_packages.items[package_id.id];
+    }
+
+    fn addClass(self: *Work, package_id: PackageID, source_id: SourceID, ast: *const grammar.ClassDefinition) !ClassID {
+        const id = ClassID{ .id = self.working_classes.items.len };
+        try self.working_classes.append(WorkingClass{
+            .id = self.working_classes.items.len,
+            .package_id = package_id,
+            .source_id = source_id,
+            .ast = ast,
+        });
+        return id;
+    }
+    fn addInterface(self: *Work, package_id: PackageID, source_id: SourceID, ast: *const grammar.InterfaceDefinition) !InterfaceID {
+        const id = InterfaceID{ .id = self.working_interfaces.items.len };
+        try self.working_interfaces.append(WorkingInterface{
+            .id = self.working_interfaces.items.len,
+            .package_id = package_id,
+            .source_id = source_id,
+            .ast = ast,
+        });
+        return id;
     }
 
     pub fn getPackageByName(self: *Work, package_name: Identifier) ?PackageID {
@@ -102,7 +166,7 @@ const Work = struct {
         assert(self.getPackageByName(package_name) == null);
 
         const new_id = self.working_packages.items.len;
-        const package = WorkingPackage.init(new_id);
+        const package = WorkingPackage.init(self, package_name, new_id);
         try self.working_packages.append(package);
         try self.package_ids_by_name.put(package_name, new_id);
         return PackageID{ .id = new_id };
@@ -116,6 +180,7 @@ const Work = struct {
             .working_packages = std.ArrayList(WorkingPackage).init(allocator),
             .working_classes = std.ArrayList(WorkingClass).init(allocator),
             .working_functions = std.ArrayList(WorkingFunction).init(allocator),
+            .working_interfaces = std.ArrayList(WorkingInterface).init(allocator),
 
             .package_ids_by_name = IdentifierMap(usize).init(allocator, identifier_pool),
         };
@@ -149,19 +214,21 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
 
     // Define all objects.
     for (source_contexts) |*c, i| {
+        const source_id = SourceID{ .id = i };
         const source = sources[i];
 
         var package = work.getPackage(c.package_id);
 
         for (source.definitions) |definition| {
             switch (definition) {
-                .ClassDefinition => |cd| {
+                .ClassDefinition => |class_def| {
+                    try package.defineClass(&work, source_id, class_def, error_message);
+                },
+                .UnionDefinition => |union_def| {
                     unreachable;
                 },
-                .UnionDefinition => |ud| {
-                    unreachable;
-                },
-                .InterfaceDefinition => |id| {
+                .InterfaceDefinition => |interface_def| {
+                    try package.defineInterface(&work, source_id, interface_def, error_message);
                     unreachable;
                 },
             }
@@ -244,5 +311,5 @@ test "sanity" {
     var allocator = &linked.allocator;
     var empty: [0]grammar.Source = undefined;
     var pool = IdentifierPool.init(allocator);
-    _ = try semantics(allocator, &pool, empty[0..0], undefined);
+    // _ = try semantics(allocator, &pool, empty[0..0], undefined);
 }
