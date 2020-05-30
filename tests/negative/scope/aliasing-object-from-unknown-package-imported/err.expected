@@ -1,5 +1,5 @@
 ERROR:
-There is no package named `gamma`, but it's referenced at beta.smol:3:8-3:13:
+There is no package named `gamma`, but it was referenced at beta.smol:3:8-3:13:
          2 | 
          3 | import gamma:Foo;
            |        ^^^^^

@@ -50,7 +50,9 @@ const WorkingPackage = struct {
                 .{ .Text = self.package_name.string() },
                 .{ .Text = ":" },
                 .{ .Text = name.string() },
-                .{ .Text = "` is defined for a second time" },
+                .{ .Text = "` is defined for a second time in the `" },
+                .{ .Text = self.package_name.string() },
+                .{ .Text = "` package" },
                 .{ .AtLocation = binding_location },
                 .{ .Text = "The first definition was" },
                 .{ .AtLocation = existing.binding_location },
@@ -134,6 +136,19 @@ const Work = struct {
         return &self.working_packages.items[package_id.id];
     }
 
+    fn findPackageByName(self: *Work, name: Identifier, access_location: Location, error_message: *ErrorMessage) !PackageID {
+        if (self.package_ids_by_name.get(name)) |package_id| {
+            return PackageID{ .id = package_id.* };
+        }
+        error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+            .{ .Text = "There is no package named `" },
+            .{ .Text = name.string() },
+            .{ .Text = "`, but it was referenced" },
+            .{ .AtLocation = access_location },
+        });
+        return error.CompileError;
+    }
+
     fn addClass(self: *Work, package_id: PackageID, source_id: SourceID, ast: *const grammar.ClassDefinition) !ClassID {
         const id = ClassID{ .id = self.working_classes.items.len };
         try self.working_classes.append(WorkingClass{
@@ -155,7 +170,7 @@ const Work = struct {
         return id;
     }
 
-    pub fn getPackageByName(self: *Work, package_name: Identifier) ?PackageID {
+    pub fn getPackageByNameOpt(self: *Work, package_name: Identifier) ?PackageID {
         if (self.package_ids_by_name.get(package_name)) |id| {
             return PackageID{ .id = id.* };
         }
@@ -163,7 +178,7 @@ const Work = struct {
     }
 
     pub fn addPackageByName(self: *Work, package_name: Identifier) !PackageID {
-        assert(self.getPackageByName(package_name) == null);
+        assert(self.getPackageByNameOpt(package_name) == null);
 
         const new_id = self.working_packages.items.len;
         const package = WorkingPackage.init(self, package_name, new_id);
@@ -188,14 +203,21 @@ const Work = struct {
 };
 
 const SourceContext = struct {
+    package_id: PackageID,
+
     referenceable_packages: IdentifierMap(PackageID),
 
-    package_id: PackageID,
+    imported_objects: IdentifierMap(ObjectID),
+
+    fn importObject(self: *SourceContext, work: *Work, name: Identifier, object: ObjectID, location: Location) !void {
+        unreachable;
+    }
 
     pub fn init(work: *Work, package_id: PackageID) SourceContext {
         return SourceContext{
             .package_id = package_id,
             .referenceable_packages = IdentifierMap(PackageID).init(work.allocator, work.pool),
+            .imported_objects = IdentifierMap(ObjectID).init(work.allocator, work.pool),
         };
     }
 };
@@ -208,7 +230,8 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
     for (source_contexts) |*c, i| {
         const source = sources[i];
         const package_name = source.package.package_name.value;
-        const package_id = if (work.getPackageByName(package_name)) |id| id else try work.addPackageByName(package_name);
+        const package_id = work.getPackageByNameOpt(package_name) orelse
+            try work.addPackageByName(package_name);
         c.* = SourceContext.init(&work, package_id);
     }
 
@@ -229,7 +252,6 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
                 },
                 .InterfaceDefinition => |interface_def| {
                     try package.defineInterface(&work, source_id, interface_def, error_message);
-                    unreachable;
                 },
             }
         }
@@ -240,7 +262,28 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
         const source = sources[i];
 
         for (source.imports) |import| {
-            unreachable;
+            switch (import.imported) {
+                .OfObject => |import_of_object| {
+                    const package_iden = import_of_object.package_name;
+                    const object_iden = import_of_object.object_name;
+                    const from_package = try work.findPackageByName(package_iden.value, package_iden.location, error_message);
+                    const binding = work.getPackage(from_package).objects_by_name.get(object_iden.value) orelse {
+                        error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                            .{ .Text = "There is no object named `" },
+                            .{ .Text = object_iden.value.string() },
+                            .{ .Text = "` in package `" },
+                            .{ .Text = package_iden.value.string() },
+                            .{ .Text = "` but an import is attempted" },
+                            .{ .AtLocation = object_iden.location },
+                        });
+                        return error.CompileError;
+                    };
+                    try c.importObject(&work, import_of_object.object_name.value, binding.object_id, import_of_object.location);
+                },
+                .OfPackage => |import_of_package| {
+                    unreachable;
+                },
+            }
         }
     }
 
@@ -306,10 +349,10 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
 }
 
 test "sanity" {
-    var buffer: [1024 * 1024]u8 = undefined;
-    var linked = LinkAllocator.init(buffer[0..]);
-    var allocator = &linked.allocator;
-    var empty: [0]grammar.Source = undefined;
-    var pool = IdentifierPool.init(allocator);
+    // var buffer: [1024 * 1024]u8 = undefined;
+    // var linked = LinkAllocator.init(buffer[0..]);
+    // var allocator = &linked.allocator;
+    // var empty: [0]grammar.Source = undefined;
+    // var pool = IdentifierPool.init(allocator);
     // _ = try semantics(allocator, &pool, empty[0..0], undefined);
 }

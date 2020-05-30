@@ -1,5 +1,5 @@
 ERROR:
-The object `testing:Alpha` is defined for a second time at test2.smol:3:7-3:12:
+The object `testing:Alpha` is defined for a second time in the `testing` package at test2.smol:3:7-3:12:
          2 | 
          3 | class Alpha {}
            |       ^^^^^
