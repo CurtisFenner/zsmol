@@ -1,0 +1,6 @@
+ERROR:
+There is no object named `NoSuchObject` in package `alpha` but an import is attempted at test.smol:3:14-3:26:
+         2 | 
+         3 | import alpha:NoSuchObject;
+           |              ^^^^^^^^^^^^
+         4 | 

@@ -1,5 +1,5 @@
 ERROR:
-The object `p:Foo` is defined for a second time at beta.smol:3:11-3:14:
+The object `p:Foo` is defined for a second time in the `p` package at beta.smol:3:11-3:14:
          2 | 
          3 | interface Foo {}
            |           ^^^

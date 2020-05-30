@@ -1,0 +1,8 @@
+package testing;
+
+import alpha:NoSuchObject;
+
+class Test {
+	fn main() Unit {
+	}
+}
