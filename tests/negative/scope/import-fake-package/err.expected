@@ -1,5 +1,5 @@
 ERROR:
-There is no package named `nosuchpackage`, but it's referenced at test.smol:3:8-3:21:
+There is no package named `nosuchpackage`, but it was referenced at test.smol:3:8-3:21:
          2 | 
          3 | import nosuchpackage;
            |        ^^^^^^^^^^^^^

@@ -162,7 +162,7 @@ test "tests/negative/scope/define-class-twice" {
     defer arena.deinit();
     const allocator = &arena.allocator;
 
-    var args = [_][]const u8{"C:\\Users\\Curtis\\Desktop\\zsmol\\tests\\negative\\scope\\define-class-twice\\test.smol"};
+    var args = [_][]const u8{"C:\\Users\\Curtis\\Desktop\\zsmol\\tests\\negative\\scope\\define-class-twice-same-source\\test.smol"};
     assert(40 == try mainInterpret(allocator, &args));
 }
 

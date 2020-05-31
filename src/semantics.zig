@@ -26,6 +26,11 @@ const ObjectBinding = struct {
     object_id: ObjectID,
 };
 
+const PackageBinding = struct {
+    binding_location: Location,
+    package_id: PackageID,
+};
+
 const WorkingPackage = struct {
     /// The index into the `working_packages` array of `Work`.
     id: usize,
@@ -205,19 +210,65 @@ const Work = struct {
 const SourceContext = struct {
     package_id: PackageID,
 
-    referenceable_packages: IdentifierMap(PackageID),
+    referenceable_packages: IdentifierMap(PackageBinding),
 
-    imported_objects: IdentifierMap(ObjectID),
+    imported_objects: IdentifierMap(ObjectBinding),
 
-    fn importObject(self: *SourceContext, work: *Work, name: Identifier, object: ObjectID, location: Location) !void {
-        unreachable;
+    fn importObject(self: *SourceContext, work: *Work, name: Identifier, object_id: ObjectID, binding_location: Location, error_message: *ErrorMessage) !void {
+        const package = work.getPackage(self.package_id);
+        if (self.imported_objects.get(name) orelse package.objects_by_name.get(name)) |existing| {
+            error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                .{ .Text = "The name `" },
+                .{ .Text = name.string() },
+                .{ .Text = "` had already been bound" },
+                .{ .AtLocation = existing.binding_location },
+                .{ .Text = "However, it was imported again" },
+                .{ .AtLocation = binding_location },
+            });
+            return error.CompileError;
+        }
+        try self.imported_objects.put(name, ObjectBinding{
+            .object_id = object_id,
+            .binding_location = binding_location,
+        });
+    }
+
+    fn importPackage(self: *SourceContext, work: *Work, name: Identifier, package_id: PackageID, binding_location: Location, error_message: *ErrorMessage) !void {
+        const this_package_name = work.getPackage(self.package_id).package_name;
+        if (name.eq(this_package_name)) {
+            error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                .{ .Text = "A package cannot import itself.\n" },
+                .{ .Text = "However, the package `" },
+                .{ .Text = this_package_name.string() },
+                .{ .Text = "` attempts to import itself" },
+                .{ .AtLocation = binding_location },
+            });
+            return error.CompileError;
+        }
+
+        if (self.referenceable_packages.get(name)) |existing| {
+            error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+                .{ .Text = "The package `" },
+                .{ .Text = name.string() },
+                .{ .Text = "` has already been imported" },
+                .{ .AtLocation = existing.binding_location },
+                .{ .Text = "However, it was imported again" },
+                .{ .AtLocation = binding_location },
+            });
+            return error.CompileError;
+        }
+
+        try self.referenceable_packages.put(name, PackageBinding{
+            .package_id = package_id,
+            .binding_location = binding_location,
+        });
     }
 
     pub fn init(work: *Work, package_id: PackageID) SourceContext {
         return SourceContext{
             .package_id = package_id,
-            .referenceable_packages = IdentifierMap(PackageID).init(work.allocator, work.pool),
-            .imported_objects = IdentifierMap(ObjectID).init(work.allocator, work.pool),
+            .referenceable_packages = IdentifierMap(PackageBinding).init(work.allocator, work.pool),
+            .imported_objects = IdentifierMap(ObjectBinding).init(work.allocator, work.pool),
         };
     }
 };
@@ -278,10 +329,12 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
                         });
                         return error.CompileError;
                     };
-                    try c.importObject(&work, import_of_object.object_name.value, binding.object_id, import_of_object.location);
+                    try c.importObject(&work, import_of_object.object_name.value, binding.object_id, import_of_object.object_name.location, error_message);
                 },
                 .OfPackage => |import_of_package| {
-                    unreachable;
+                    const package_iden = import_of_package.package_name;
+                    const from_package = try work.findPackageByName(package_iden.value, package_iden.location, error_message);
+                    try c.importPackage(&work, package_iden.value, from_package, package_iden.location, error_message);
                 },
             }
         }

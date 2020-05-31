@@ -5,7 +5,7 @@ The package `alpha` has already been imported at test.smol:2:8-2:13:
            |        ^^^^^
          3 | import alpha;
 
-but you try to import it again at test.smol:3:8-3:13:
+However, it was imported again at test.smol:3:8-3:13:
          2 | import alpha;
          3 | import alpha;
            |        ^^^^^
