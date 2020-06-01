@@ -14,6 +14,7 @@ const ErrorMessage = grammar.ErrorMessage;
 const Identifier = @import("identifiers.zig").Identifier;
 const IdentifierPool = @import("identifiers.zig").IdentifierPool;
 const IdentifierMap = @import("identifiers.zig").IdentifierMap;
+const compile_errors = @import("compile_errors.zig");
 
 const ObjectID = union(enum) {
     ClassID: ClassID,
@@ -50,19 +51,12 @@ const WorkingPackage = struct {
 
     fn defineObject(self: *WorkingPackage, work: *Work, source_id: SourceID, name: Identifier, binding_location: Location, object: ObjectID, error_message: *ErrorMessage) !void {
         if (self.objects_by_name.get(name)) |existing| {
-            error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
-                .{ .Text = "The object `" },
-                .{ .Text = self.package_name.string() },
-                .{ .Text = ":" },
-                .{ .Text = name.string() },
-                .{ .Text = "` is defined for a second time in the `" },
-                .{ .Text = self.package_name.string() },
-                .{ .Text = "` package" },
-                .{ .AtLocation = binding_location },
-                .{ .Text = "The first definition was" },
-                .{ .AtLocation = existing.binding_location },
+            return compile_errors.ObjectRedefinedErr.err(error_message, .{
+                .package_iden = self.package_name,
+                .object_iden = name,
+                .first_definition_location = existing.binding_location,
+                .second_definition_location = binding_location,
             });
-            return error.CompileError;
         }
         try self.objects_by_name.put(name, ObjectBinding{
             .binding_location = binding_location,
@@ -145,13 +139,10 @@ const Work = struct {
         if (self.package_ids_by_name.get(name)) |package_id| {
             return PackageID{ .id = package_id.* };
         }
-        error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
-            .{ .Text = "There is no package named `" },
-            .{ .Text = name.string() },
-            .{ .Text = "`, but it was referenced" },
-            .{ .AtLocation = access_location },
+        return compile_errors.UnknownPackageReferencedErr.err(error_message, .{
+            .package_iden = name,
+            .reference_location = access_location,
         });
-        return error.CompileError;
     }
 
     fn addClass(self: *Work, package_id: PackageID, source_id: SourceID, ast: *const grammar.ClassDefinition) !ClassID {
@@ -217,15 +208,11 @@ const SourceContext = struct {
     fn importObject(self: *SourceContext, work: *Work, name: Identifier, object_id: ObjectID, binding_location: Location, error_message: *ErrorMessage) !void {
         const package = work.getPackage(self.package_id);
         if (self.imported_objects.get(name) orelse package.objects_by_name.get(name)) |existing| {
-            error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
-                .{ .Text = "The name `" },
-                .{ .Text = name.string() },
-                .{ .Text = "` had already been bound" },
-                .{ .AtLocation = existing.binding_location },
-                .{ .Text = "However, it was imported again" },
-                .{ .AtLocation = binding_location },
+            return compile_errors.ObjectReimportedErr.err(error_message, .{
+                .object_iden = name,
+                .first_binding_location = existing.binding_location,
+                .import_location = binding_location,
             });
-            return error.CompileError;
         }
         try self.imported_objects.put(name, ObjectBinding{
             .object_id = object_id,
@@ -236,26 +223,18 @@ const SourceContext = struct {
     fn importPackage(self: *SourceContext, work: *Work, name: Identifier, package_id: PackageID, binding_location: Location, error_message: *ErrorMessage) !void {
         const this_package_name = work.getPackage(self.package_id).package_name;
         if (name.eq(this_package_name)) {
-            error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
-                .{ .Text = "A package cannot import itself.\n" },
-                .{ .Text = "However, the package `" },
-                .{ .Text = this_package_name.string() },
-                .{ .Text = "` attempts to import itself" },
-                .{ .AtLocation = binding_location },
+            return compile_errors.PackageImportSelfErr.err(error_message, .{
+                .package_name = this_package_name,
+                .import_location = binding_location,
             });
-            return error.CompileError;
         }
 
         if (self.referenceable_packages.get(name)) |existing| {
-            error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
-                .{ .Text = "The package `" },
-                .{ .Text = name.string() },
-                .{ .Text = "` has already been imported" },
-                .{ .AtLocation = existing.binding_location },
-                .{ .Text = "However, it was imported again" },
-                .{ .AtLocation = binding_location },
+            return compile_errors.PackageReimportedErr.err(error_message, .{
+                .package_iden = name,
+                .first_binding_location = existing.binding_location,
+                .import_location = binding_location,
             });
-            return error.CompileError;
         }
 
         try self.referenceable_packages.put(name, PackageBinding{
@@ -319,15 +298,11 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
                     const object_iden = import_of_object.object_name;
                     const from_package = try work.findPackageByName(package_iden.value, package_iden.location, error_message);
                     const binding = work.getPackage(from_package).objects_by_name.get(object_iden.value) orelse {
-                        error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
-                            .{ .Text = "There is no object named `" },
-                            .{ .Text = object_iden.value.string() },
-                            .{ .Text = "` in package `" },
-                            .{ .Text = package_iden.value.string() },
-                            .{ .Text = "` but an import is attempted" },
-                            .{ .AtLocation = object_iden.location },
+                        return compile_errors.ImportUnknownObjectErr.err(error_message, .{
+                            .object_iden = object_iden.value,
+                            .package_iden = package_iden.value,
+                            .import_location = object_iden.location,
                         });
-                        return error.CompileError;
                     };
                     try c.importObject(&work, import_of_object.object_name.value, binding.object_id, import_of_object.object_name.location, error_message);
                 },
