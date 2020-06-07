@@ -130,6 +130,10 @@ pub fn IdentifierMap(comptime Value: type) type {
             };
         }
 
+        fn deinit(self: *Self) void {
+            self.nibble_trie.deinit();
+        }
+
         pub fn get(self: *const Self, key: Identifier) ?*Value {
             assert(key.pool == self.identifier_pool);
             var iterator = IntIterator.init(key.id);

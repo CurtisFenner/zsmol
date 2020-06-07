@@ -765,16 +765,33 @@ pub const Definition = union(enum) {
 
 pub const ClassDefinition = struct {
     class_name: LeafTypeIden,
-    generics: ?*const Generics,
-    implements: ?*const Implements,
+    generics_opt: ?*const Generics,
+    implements_ast: ?*const Implements,
     fields: []const Field,
     members: []const FunctionDef,
+
+    fn generics(self: ClassDefinition) Generics {
+        if (self.generics_opt) |g| {
+            return g.*;
+        }
+        return Generics{
+            .parameters = &[0]LeafTypeVar{},
+            .constraints = null,
+        };
+    }
+
+    fn implements(self: *const ClassDefinition) []const Type {
+        if (self.implements_ast) |i| {
+            return i.constraints;
+        }
+        return &[0]Type{};
+    }
 
     pub const Parser = comb.fluent //
         .req("_", LeafKeyClass) //
         .req("class_name", LeafTypeIden).cut("Expected a class name after `class`") //
-        .opt("generics", Generics) //
-        .opt("implements", Implements) //
+        .opt("generics_opt", Generics) //
+        .opt("implements_ast", Implements) //
         .req("_", LeafPuncCurlyOpen).cut("Expected a `{` to begin a class's body") //
         .star("fields", Field) //
         .star("members", FunctionDef) //
@@ -894,6 +911,19 @@ pub const Type = union(enum) {
     Self: *const LeafTypeSelf,
     Generic: *const LeafTypeVar,
     Concrete: *const ConcreteType,
+
+    pub fn location(self: Type) Location {
+        return switch (self) {
+            .Boolean => |bt| bt.location,
+            .Int => |it| it.location,
+            .String => |st| st.location,
+            .Unit => |ut| ut.location,
+            .Self => |st| st.location,
+            .Generic => |gt| gt.location,
+            .Concrete => |ct| ct.location,
+        };
+    }
+
     pub const Parser = comb.ChoiceParser(@This());
 };
 
@@ -901,12 +931,19 @@ pub const ConcreteType = struct {
     qualifier: ?*const PackageQualifier,
     object: LeafTypeIden,
     // TODO: Use some kind of mapping to replace this with a plain list.
-    arguments: ?*const TypeArguments,
+    arguments_opt: ?*const TypeArguments,
+
+    fn arguments(self: *const ConcreteType) []const Type {
+        if (self.arguments_opt) |type_arguments| {
+            return type_arguments.arguments;
+        }
+        return &[_]Type{};
+    }
 
     pub const Parser = comb.fluent //
         .opt("qualifier", PackageQualifier) //
         .req("object", LeafTypeIden) //
-        .opt("arguments", TypeArguments) //
+        .opt("arguments_opt", TypeArguments) //
         .seq(@This());
     location: Location,
 };

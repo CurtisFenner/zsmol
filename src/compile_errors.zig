@@ -110,3 +110,49 @@ pub const PackageImportSelfErr = struct {
         return error.CompileError;
     }
 };
+
+pub const InterfaceConstraintUsedAsTypeArgument = struct {
+    package_name: Identifier,
+    object_name: Identifier,
+    argument_location: Location,
+
+    pub fn err(error_message: *ErrorMessage, self: @This()) error{CompileError} {
+        error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+            .{ .Text = "The interface constraint `" },
+            .{ .Text = self.package_name.string() },
+            .{ .Text = ":" },
+            .{ .Text = self.object_name.string() },
+            .{ .Text = "` is not a type, and cannot be used as a type argument like" },
+            .{ .AtLocation = self.argument_location },
+        });
+        return error.CompileError;
+    }
+};
+
+pub const ImplementsNonConstraintErr = struct {
+    claim_location: Location,
+
+    pub fn err(error_message: *ErrorMessage, self: @This()) error{CompileError} {
+        error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+            .{ .Text = "Only constraints can be implemented.\n" },
+            .{ .Text = "However, a type is used" },
+            .{ .AtLocation = self.claim_location },
+        });
+        return error.CompileError;
+    }
+};
+
+pub const UnknownUnqualifiedObjectReferencedErr = struct {
+    object_name: Identifier,
+    reference_location: Location,
+
+    pub fn err(error_message: *ErrorMessage, self: @This()) error{CompileError} {
+        error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+            .{ .Text = "There is no object named `" },
+            .{ .Text = self.object_name.string() },
+            .{ .Text = "` but it is referenced" },
+            .{ .AtLocation = self.reference_location },
+        });
+        return error.CompileError;
+    }
+};

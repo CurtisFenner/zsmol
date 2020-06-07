@@ -45,8 +45,12 @@ const WorkingPackage = struct {
             .id = id,
             .package_name = name,
             .work = work,
-            .objects_by_name = IdentifierMap(ObjectBinding).init(work.allocator, work.pool),
+            .objects_by_name = IdentifierMap(ObjectBinding).init(work.top_allocator, work.pool),
         };
+    }
+
+    fn deinit(self: *WorkingPackage) void {
+        self.objects_by_name.deinit();
     }
 
     fn defineObject(self: *WorkingPackage, work: *Work, source_id: SourceID, name: Identifier, binding_location: Location, object: ObjectID, error_message: *ErrorMessage) !void {
@@ -81,6 +85,37 @@ const WorkingPackage = struct {
     }
 };
 
+const Constraints = struct {
+    constraints: std.ArrayList(TypeLike),
+
+    fn deinit(self: *Constraints) void {
+        self.constraints.deinit();
+    }
+};
+
+const TypeParameterScope = struct {
+    type_parameters_by_name: IdentifierMap(TypeVariableID),
+    type_parameter_names: std.ArrayList(Identifier),
+    type_parameter_constraints: std.ArrayList(Constraints),
+
+    fn init(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool) TypeParameterScope {
+        return .{
+            .type_parameters_by_name = IdentifierMap(TypeVariableID).init(allocator, identifier_pool),
+            .type_parameter_names = std.ArrayList(Identifier).init(allocator),
+            .type_parameter_constraints = std.ArrayList(Constraints).init(allocator),
+        };
+    }
+
+    fn deinit(self: *TypeParameterScope) void {
+        self.type_parameters_by_name.deinit();
+        self.type_parameter_names.deinit();
+        for (self.type_parameter_constraints) |c| {
+            c.deinit();
+        }
+        self.type_parameter_constraints.deinit();
+    }
+};
+
 const WorkingClass = struct {
     /// The index into the `working_classes` array of `Work`.
     id: usize,
@@ -92,6 +127,17 @@ const WorkingClass = struct {
     source_id: SourceID,
 
     ast: *const grammar.ClassDefinition,
+
+    type_parameter_scope: TypeParameterScope,
+
+    /// A map of type-parameter identifier to index.
+    fn deinit(self: *WorkingClass) void {
+        self.type_parameters_by_name.deinit();
+        for (self.type_parameter_constraints.items) |*tpc| {
+            tpc.deinit();
+        }
+        self.type_parameter_constraints.deinit();
+    }
 };
 
 const WorkingInterface = struct {
@@ -105,6 +151,14 @@ const WorkingInterface = struct {
     source_id: SourceID,
 
     ast: *const grammar.InterfaceDefinition,
+
+    fn getPackageName(self: *const WorkingInterface, work: *Work) Identifier {
+        return work.getPackage(self.package_id).package_name;
+    }
+
+    fn getName(self: *const WorkingInterface) Identifier {
+        return self.ast.interface_name.value;
+    }
 };
 
 const WorkingFunction = struct {
@@ -114,6 +168,30 @@ const WorkingFunction = struct {
     ast: grammar.FunctionDef,
 };
 
+const TypeVariableID = struct {
+    id: usize,
+};
+
+const TypeLike = union(enum) {
+    ClassType: ClassType,
+    InterfaceConstraint: InterfaceConstraint,
+    IntType: void,
+    StringType: void,
+
+    /// The index into the type-parameters scope stack.
+    GenericType: TypeVariableID,
+};
+
+const InterfaceConstraint = struct {
+    interface_id: InterfaceID,
+    type_arguments: []TypeLike,
+};
+
+const ClassType = struct {
+    class_id: ClassID,
+    type_arguments: []TypeLike,
+};
+
 const SourceID = struct { id: usize };
 const ClassID = struct { id: usize };
 const UnionID = struct { id: usize };
@@ -121,8 +199,10 @@ const InterfaceID = struct { id: usize };
 const PackageID = struct { id: usize };
 
 const Work = struct {
-    allocator: *std.mem.Allocator,
+    top_allocator: *std.mem.Allocator,
     pool: *IdentifierPool,
+
+    arena: std.heap.ArenaAllocator,
 
     working_packages: std.ArrayList(WorkingPackage),
     working_classes: std.ArrayList(WorkingClass),
@@ -133,6 +213,10 @@ const Work = struct {
 
     fn getPackage(self: *Work, package_id: PackageID) *WorkingPackage {
         return &self.working_packages.items[package_id.id];
+    }
+
+    fn getInterface(self: *Work, interface_id: InterfaceID) *WorkingInterface {
+        return &self.working_interfaces.items[interface_id.id];
     }
 
     fn findPackageByName(self: *Work, name: Identifier, access_location: Location, error_message: *ErrorMessage) !PackageID {
@@ -152,6 +236,8 @@ const Work = struct {
             .package_id = package_id,
             .source_id = source_id,
             .ast = ast,
+
+            .type_parameter_scope = TypeParameterScope.init(self.top_allocator, self.pool),
         });
         return id;
     }
@@ -183,17 +269,31 @@ const Work = struct {
         return PackageID{ .id = new_id };
     }
 
-    pub fn init(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool) Work {
+    fn deinit(self: *Work) void {
+        for (self.working_packages.items) |*wp| {
+            wp.deinit();
+        }
+        self.working_packages.deinit();
+        self.working_classes.deinit();
+        self.working_functions.deinit();
+        self.working_interfaces.deinit();
+        self.package_ids_by_name.deinit();
+        self.arena.deinit();
+    }
+
+    pub fn init(top_allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool) Work {
         return Work{
-            .allocator = allocator,
+            .top_allocator = top_allocator,
             .pool = identifier_pool,
 
-            .working_packages = std.ArrayList(WorkingPackage).init(allocator),
-            .working_classes = std.ArrayList(WorkingClass).init(allocator),
-            .working_functions = std.ArrayList(WorkingFunction).init(allocator),
-            .working_interfaces = std.ArrayList(WorkingInterface).init(allocator),
+            .arena = std.heap.ArenaAllocator.init(top_allocator),
 
-            .package_ids_by_name = IdentifierMap(usize).init(allocator, identifier_pool),
+            .working_packages = std.ArrayList(WorkingPackage).init(top_allocator),
+            .working_classes = std.ArrayList(WorkingClass).init(top_allocator),
+            .working_functions = std.ArrayList(WorkingFunction).init(top_allocator),
+            .working_interfaces = std.ArrayList(WorkingInterface).init(top_allocator),
+
+            .package_ids_by_name = IdentifierMap(usize).init(top_allocator, identifier_pool),
         };
     }
 };
@@ -243,20 +343,129 @@ const SourceContext = struct {
         });
     }
 
+    fn resolveQualifiedObject(self: *const SourceContext, work: *const Work, object_iden: grammar.LeafTypeIden, package_iden: *const grammar.PackageQualifier, error_message: *ErrorMessage) !ObjectID {
+        unreachable;
+    }
+
+    /// Resolves an object referenced in this package.
+    /// Produces a CompileError if such an object doesn't exist.
+    fn resolveUnqualifiedObject(self: *const SourceContext, work: *Work, object_iden: grammar.LeafTypeIden, error_message: *ErrorMessage) !ObjectID {
+        if (self.imported_objects.get(object_iden.value)) |object_binding| {
+            return object_binding.object_id;
+        }
+        const package = work.getPackage(self.package_id);
+        if (package.objects_by_name.get(object_iden.value)) |object_binding| {
+            return object_binding.object_id;
+        }
+
+        return compile_errors.UnknownUnqualifiedObjectReferencedErr.err(error_message, .{
+            .object_name = object_iden.value,
+            .reference_location = object_iden.location,
+        });
+    }
+
+    /// Resolve a grammar.Type (which is used to represent both constraints (ie, interfaces) and types (e.g., classes
+    /// and unions)) to an intermediate TypeLike.
+    /// Produces a compile error if
+    /// * An object referenced doesn't exist
+    /// * An argument to a type is a non-type (i.e., an interface).
+    /// * The wrong number of arguments is passed to a union/class/interface.
+    /// An object is still returned if the base object is an interface.
+    fn resolveTypeLikeUnchecked(self: *const SourceContext, work: *Work, ast: grammar.Type, check_constraints: bool, error_message: *ErrorMessage) error{ CompileError, OutOfMemory }!TypeLike {
+        return switch (ast) {
+            .Boolean => unreachable,
+            .Int => TypeLike{ .IntType = {} },
+            .String => TypeLike{ .StringType = {} },
+            .Unit => unreachable,
+            .Self => unreachable,
+            .Generic => unreachable,
+            .Concrete => |concrete_ast| {
+                // Resolve the base type.
+                var object_id: ObjectID = undefined;
+                if (concrete_ast.qualifier) |qualifier| {
+                    object_id = try self.resolveQualifiedObject(work, concrete_ast.object, qualifier, error_message);
+                } else {
+                    object_id = try self.resolveUnqualifiedObject(work, concrete_ast.object, error_message);
+                }
+
+                // Recursively resolve the arguments.
+                var type_arguments: []TypeLike = undefined;
+                const ast_arguments = concrete_ast.arguments();
+                if (ast_arguments.len == 0) {
+                    type_arguments = try work.arena.allocator.alloc(TypeLike, concrete_ast.arguments().len);
+                } else {
+                    type_arguments = &[0]TypeLike{};
+                }
+
+                for (ast_arguments) |a, i| {
+                    type_arguments[i] = try self.resolveTypeLikeUnchecked(work, a, check_constraints, error_message);
+                    // TODO: (Optionally) check constraint satisfaction.
+                    switch (type_arguments[i]) {
+                        .InterfaceConstraint => |ic| {
+                            const working_interface = work.getInterface(ic.interface_id);
+                            const package_name = working_interface.getPackageName(work);
+                            const object_name = working_interface.getName();
+                            return compile_errors.InterfaceConstraintUsedAsTypeArgument.err(error_message, .{
+                                .package_name = package_name,
+                                .object_name = object_name,
+                                .argument_location = a.location(),
+                            });
+                        },
+
+                        // Types are OK.
+                        .StringType => {},
+                        .IntType => {},
+                        .ClassType => {},
+                        .GenericType => {},
+                    }
+                }
+
+                switch (object_id) {
+                    .ClassID => |class_id| return TypeLike{
+                        .ClassType = .{
+                            .class_id = class_id,
+                            .type_arguments = type_arguments,
+                        },
+                    },
+                    // TODO:
+                    .UnionID => unreachable,
+                    .InterfaceID => |interface_id| return TypeLike{
+                        .InterfaceConstraint = .{
+                            .interface_id = interface_id,
+                            .type_arguments = type_arguments,
+                        },
+                    },
+                }
+            },
+        };
+    }
+
     pub fn init(work: *Work, package_id: PackageID) SourceContext {
         return SourceContext{
             .package_id = package_id,
-            .referenceable_packages = IdentifierMap(PackageBinding).init(work.allocator, work.pool),
-            .imported_objects = IdentifierMap(ObjectBinding).init(work.allocator, work.pool),
+            .referenceable_packages = IdentifierMap(PackageBinding).init(work.top_allocator, work.pool),
+            .imported_objects = IdentifierMap(ObjectBinding).init(work.top_allocator, work.pool),
         };
+    }
+
+    fn deinit(self: *SourceContext) void {
+        self.referenceable_packages.deinit();
+        self.imported_objects.deinit();
     }
 };
 
 pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool, sources: []const grammar.Source, error_message: *ErrorMessage) !ir.Program {
     var work = Work.init(allocator, identifier_pool);
+    defer work.deinit();
 
     // Define all source packages.
     var source_contexts = try allocator.alloc(SourceContext, sources.len);
+    defer {
+        for (source_contexts) |*sc| {
+            sc.deinit();
+        }
+        allocator.free(source_contexts);
+    }
     for (source_contexts) |*c, i| {
         const source = sources[i];
         const package_name = source.package.package_name.value;
@@ -315,7 +524,31 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
         }
     }
 
+    // Resolve all type-argument constraints.
+    for (work.working_classes.items) |*working_class| {
+        // TODO:
+    }
+
     // Resolve all implementation claims.
+    for (work.working_classes.items) |*working_class| {
+        const source = source_contexts[working_class.source_id.id];
+
+        for (working_class.ast.implements()) |claim| {
+            const constraint = try source.resolveTypeLikeUnchecked(&work, claim, false, error_message);
+            switch (constraint) {
+                .InterfaceConstraint => {
+                    // TODO: Register claim.
+                    unreachable;
+                },
+                else => {
+                    return compile_errors.ImplementsNonConstraintErr.err(error_message, .{
+                        .claim_location = claim.location(),
+                    });
+                },
+            }
+        }
+    }
+
     for (source_contexts) |*c, i| {
         const source = sources[i];
 
