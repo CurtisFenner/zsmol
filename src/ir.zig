@@ -2,24 +2,47 @@
 // Defines the intermediate representation of Smol programs that can be compiled
 // to a target or interpreted directly.
 
-pub const Name = []const u8;
+pub const IR = struct {
+    arena: std.heap.ArenaAllocator,
 
-pub const VarID = struct {
-    id: u32,
+    fn init(allocator: *std.mem.Allocator) IR {
+        return IR{
+            .arena = std.heap.ArenaAllocator.init(allocator),
+        };
+    }
 };
 
-pub const RecordID = struct {
-    id: u32,
+pub const RecordType = struct {
+    record_id: u32,
+    arguments: []const Type,
 };
 
 pub const Type = union(enum) {
     I64: void,
-    Record: RecordID,
-    GenericType: void,
+    Record: RecordType,
+    GenericType: u32,
 };
 
-pub const FunctionID = struct {
+pub const FunctionSignature = struct {
+    type_argument_count: u32,
+    return_types: []const Type,
+    arguments: []const Type,
+    vtable_arguments: []const VTableInstantiation,
+};
+
+pub const VTableSignature = struct {
     id: u32,
+    type_argument_count: u32,
+    signatures: []const FunctionSignature,
+};
+
+pub const VTableInstantiation = struct {
+    id: u32,
+    arguments: []const Type,
+};
+
+pub const Function = struct {
+    signature: FunctionSignature,
 };
 
 pub const Op = union(enum) {
@@ -44,49 +67,42 @@ pub const Op = union(enum) {
     /// Variables [0, arguments.length) in the callee's stack will be initialized
     /// with the given arguments.
     pub const StaticCall = struct {
-        destinations: []const VarID,
-        function: FunctionID,
-        arguments: []const VarID,
+        function: u32,
+        destination_vars: []const u32,
+        type_arguments: []const Type,
+        vtable_arguments: []const VTableArgument,
+        argument_vars: []const u32,
     };
     StaticCall: StaticCall,
 
     pub const NewRecord = struct {
-        destination: VarID,
-        record_type: RecordID,
-        fields: []const VarID,
+        destination_var: u32,
+        record_id: u32,
+        field_vars: []const u32,
     };
     NewRecord: NewRecord,
 
     pub const ConstantI64 = struct {
-        destination: VarID,
+        destination_var: u32,
         value: i64,
     };
     ConstantI64: ConstantI64,
 
     pub const RecordField = struct {
-        destination: VarID,
-        record: VarID,
-        field: usize,
+        destination_var: u32,
+        record_var: u32,
+        field_index: u32,
     };
     RecordField: RecordField,
 };
 
-pub const Function = struct {
-    name: Name,
-    argument_types: []const Type,
-    argument_names: []const Name,
-    return_types: []const Type,
-    return_names: []const Name,
-    body: []const Op,
-};
-
 pub const Record = struct {
-    name: Name,
+    type_argument_count: u32,
     field_types: []const Type,
-    field_names: []const Name,
 };
 
 pub const Program = struct {
     functions: []const Function,
     records: []const Record,
+    vtable_signatures: []const VTableSignature,
 };
