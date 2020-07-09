@@ -85,22 +85,33 @@ const WorkingPackage = struct {
     }
 };
 
+const ConstraintBinding = struct {
+    constraint: Constraint,
+    constraining_location: Location,
+};
+
 const Constraints = struct {
-    constraints: std.ArrayList(TypeLike),
+    on_variable: Identifier,
+    constraints: std.ArrayList(ConstraintBinding),
 
     fn deinit(self: *Constraints) void {
         self.constraints.deinit();
     }
 };
 
+const TypeVariableBinding = struct {
+    type_variable_id: TypeVariableID,
+    binding_location: Location,
+};
+
 const TypeParameterScope = struct {
-    type_parameters_by_name: IdentifierMap(TypeVariableID),
+    type_parameters_by_name: IdentifierMap(TypeVariableBinding),
     type_parameter_names: std.ArrayList(Identifier),
     type_parameter_constraints: std.ArrayList(Constraints),
 
     fn init(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool) TypeParameterScope {
         return .{
-            .type_parameters_by_name = IdentifierMap(TypeVariableID).init(allocator, identifier_pool),
+            .type_parameters_by_name = IdentifierMap(TypeVariableBinding).init(allocator, identifier_pool),
             .type_parameter_names = std.ArrayList(Identifier).init(allocator),
             .type_parameter_constraints = std.ArrayList(Constraints).init(allocator),
         };
@@ -130,6 +141,9 @@ const WorkingClass = struct {
 
     type_parameter_scope: TypeParameterScope,
 
+    // The list of constraints that this class implements.
+    implements: std.ArrayList(Constraint),
+
     /// A map of type-parameter identifier to index.
     fn deinit(self: *WorkingClass) void {
         self.type_parameters_by_name.deinit();
@@ -137,6 +151,19 @@ const WorkingClass = struct {
             tpc.deinit();
         }
         self.type_parameter_constraints.deinit();
+        self.implements.deinit();
+    }
+
+    fn init(allocator: *std.mem.Allocator, pool: *IdentifierPool, id: usize, package_id: PackageID, source_id: SourceID, ast: *const grammar.ClassDefinition) WorkingClass {
+        return WorkingClass{
+            .id = id,
+            .package_id = package_id,
+            .source_id = source_id,
+            .ast = ast,
+
+            .type_parameter_scope = TypeParameterScope.init(allocator, pool),
+            .implements = std.ArrayList(Constraint).init(allocator),
+        };
     }
 };
 
@@ -151,6 +178,8 @@ const WorkingInterface = struct {
     source_id: SourceID,
 
     ast: *const grammar.InterfaceDefinition,
+
+    type_parameter_scope: TypeParameterScope,
 
     fn getPackageName(self: *const WorkingInterface, work: *Work) Identifier {
         return work.getPackage(self.package_id).package_name;
@@ -172,14 +201,21 @@ const TypeVariableID = struct {
     id: usize,
 };
 
-const TypeLike = union(enum) {
+const Type = union(enum) {
     ClassType: ClassType,
-    InterfaceConstraint: InterfaceConstraint,
     IntType: void,
     StringType: void,
-
     /// The index into the type-parameters scope stack.
     GenericType: TypeVariableID,
+};
+
+const TypeLike = union(enum) {
+    Type: Type,
+    Constraint: Constraint,
+};
+
+const Constraint = union(enum) {
+    InterfaceConstraint: InterfaceConstraint,
 };
 
 const InterfaceConstraint = struct {
@@ -215,6 +251,10 @@ const Work = struct {
         return &self.working_packages.items[package_id.id];
     }
 
+    fn getClass(self: *Work, class_id: ClassID) *WorkingClass {
+        return &self.working_classes.items[class_id.id];
+    }
+
     fn getInterface(self: *Work, interface_id: InterfaceID) *WorkingInterface {
         return &self.working_interfaces.items[interface_id.id];
     }
@@ -231,14 +271,14 @@ const Work = struct {
 
     fn addClass(self: *Work, package_id: PackageID, source_id: SourceID, ast: *const grammar.ClassDefinition) !ClassID {
         const id = ClassID{ .id = self.working_classes.items.len };
-        try self.working_classes.append(WorkingClass{
-            .id = self.working_classes.items.len,
-            .package_id = package_id,
-            .source_id = source_id,
-            .ast = ast,
-
-            .type_parameter_scope = TypeParameterScope.init(self.top_allocator, self.pool),
-        });
+        try self.working_classes.append(WorkingClass.init(
+            self.top_allocator,
+            self.pool,
+            self.working_classes.items.len,
+            package_id,
+            source_id,
+            ast,
+        ));
         return id;
     }
     fn addInterface(self: *Work, package_id: PackageID, source_id: SourceID, ast: *const grammar.InterfaceDefinition) !InterfaceID {
@@ -248,6 +288,7 @@ const Work = struct {
             .package_id = package_id,
             .source_id = source_id,
             .ast = ast,
+            .type_parameter_scope = TypeParameterScope.init(self.top_allocator, self.pool),
         });
         return id;
     }
@@ -374,8 +415,8 @@ const SourceContext = struct {
     fn resolveTypeLikeUnchecked(self: *const SourceContext, work: *Work, ast: grammar.Type, check_constraints: bool, error_message: *ErrorMessage) error{ CompileError, OutOfMemory }!TypeLike {
         return switch (ast) {
             .Boolean => unreachable,
-            .Int => TypeLike{ .IntType = {} },
-            .String => TypeLike{ .StringType = {} },
+            .Int => TypeLike{ .Type = .{ .IntType = {} } },
+            .String => TypeLike{ .Type = .{ .StringType = {} } },
             .Unit => unreachable,
             .Self => unreachable,
             .Generic => unreachable,
@@ -386,6 +427,19 @@ const SourceContext = struct {
                     object_id = try self.resolveQualifiedObject(work, concrete_ast.object, qualifier, error_message);
                 } else {
                     object_id = try self.resolveUnqualifiedObject(work, concrete_ast.object, error_message);
+                }
+
+                var argument_constraints: std.ArrayList(Constraints) = undefined;
+                switch (object_id) {
+                    .ClassID => |class_id| {
+                        const base_class = work.getClass(class_id);
+                        argument_constraints = base_class.type_parameter_scope.type_parameter_constraints;
+                    },
+                    .UnionID => |ui| unreachable,
+                    .InterfaceID => |interface_id| {
+                        const base_interface = work.getInterface(interface_id);
+                        argument_constraints = base_interface.type_parameter_scope.type_parameter_constraints;
+                    },
                 }
 
                 // Recursively resolve the arguments.
@@ -401,38 +455,47 @@ const SourceContext = struct {
                     type_arguments[i] = try self.resolveTypeLikeUnchecked(work, a, check_constraints, error_message);
                     // TODO: (Optionally) check constraint satisfaction.
                     switch (type_arguments[i]) {
-                        .InterfaceConstraint => |ic| {
-                            const working_interface = work.getInterface(ic.interface_id);
-                            const package_name = working_interface.getPackageName(work);
-                            const object_name = working_interface.getName();
-                            return compile_errors.InterfaceConstraintUsedAsTypeArgument.err(error_message, .{
-                                .package_name = package_name,
-                                .object_name = object_name,
-                                .argument_location = a.location(),
-                            });
+                        .Constraint => |constraint| switch (constraint) {
+                            .InterfaceConstraint => |ic| {
+                                const working_interface = work.getInterface(ic.interface_id);
+                                const package_name = working_interface.getPackageName(work);
+                                const object_name = working_interface.getName();
+                                return compile_errors.InterfaceConstraintUsedAsTypeArgument.err(error_message, .{
+                                    .package_name = package_name,
+                                    .object_name = object_name,
+                                    .argument_location = a.location(),
+                                });
+                            },
                         },
-
                         // Types are OK.
-                        .StringType => {},
-                        .IntType => {},
-                        .ClassType => {},
-                        .GenericType => {},
+                        .Type => |t| {
+                            if (check_constraints) {
+                                for (argument_constraints.items) |constraint| {
+                                    // TODO:
+                                    unreachable;
+                                }
+                            }
+                        },
                     }
                 }
 
                 switch (object_id) {
                     .ClassID => |class_id| return TypeLike{
-                        .ClassType = .{
-                            .class_id = class_id,
-                            .type_arguments = type_arguments,
+                        .Type = .{
+                            .ClassType = .{
+                                .class_id = class_id,
+                                .type_arguments = type_arguments,
+                            },
                         },
                     },
                     // TODO:
                     .UnionID => unreachable,
                     .InterfaceID => |interface_id| return TypeLike{
-                        .InterfaceConstraint = .{
-                            .interface_id = interface_id,
-                            .type_arguments = type_arguments,
+                        .Constraint = .{
+                            .InterfaceConstraint = .{
+                                .interface_id = interface_id,
+                                .type_arguments = type_arguments,
+                            },
                         },
                     },
                 }
@@ -526,21 +589,43 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
 
     // Resolve all type-argument constraints.
     for (work.working_classes.items) |*working_class| {
-        // TODO:
+        if (working_class.ast.generics) |generics| {
+            for (generics.parameters) |parameter| {
+                unreachable;
+            }
+            if (generics.constraints) |constraints| {
+                for (constraints.constraints) |constraint| {
+                    unreachable;
+                }
+            }
+        }
+    }
+    for (work.working_interfaces.items) |*working_interface| {
+        if (working_interface.ast.generics) |generics| {
+            for (generics.parameters) |parameter| {
+                unreachable;
+            }
+            if (generics.constraints) |constraints| {
+                for (constraints.constraints) |constraint| {
+                    unreachable;
+                }
+            }
+        }
     }
 
-    // Resolve all implementation claims.
+    // Resolve all implementation claims. After this is done, checking the
+    // validity of a type is possible.
     for (work.working_classes.items) |*working_class| {
         const source = source_contexts[working_class.source_id.id];
 
         for (working_class.ast.implements()) |claim| {
-            const constraint = try source.resolveTypeLikeUnchecked(&work, claim, false, error_message);
-            switch (constraint) {
-                .InterfaceConstraint => {
-                    // TODO: Register claim.
-                    unreachable;
+            const constraint_like = try source.resolveTypeLikeUnchecked(&work, claim, false, error_message);
+            switch (constraint_like) {
+                .Constraint => |constraint| {
+                    // TODO: Reject duplicate implementation claims.
+                    try working_class.implements.append(constraint);
                 },
-                else => {
+                .Type => {
                     return compile_errors.ImplementsNonConstraintErr.err(error_message, .{
                         .claim_location = claim.location(),
                     });
@@ -549,61 +634,12 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
         }
     }
 
-    for (source_contexts) |*c, i| {
-        const source = sources[i];
-
-        for (source.definitions) |definition| {
-            switch (definition) {
-                .ClassDefinition => |cd| {
-                    unreachable;
-                },
-                .UnionDefinition => |ud| {
-                    unreachable;
-                },
-                .InterfaceDefinition => |id| {
-                    unreachable;
-                },
-            }
-        }
+    // Compile everything.
+    for (work.working_interfaces.items) |*working_interface| {
+        unreachable;
     }
-
-    // Build a type-checker for each source context.
-    // Compile pre/post conditions.
-    for (source_contexts) |*c, i| {
-        const source = sources[i];
-
-        for (source.definitions) |definition| {
-            switch (definition) {
-                .ClassDefinition => |cd| {
-                    unreachable;
-                },
-                .UnionDefinition => |ud| {
-                    unreachable;
-                },
-                .InterfaceDefinition => |id| {
-                    unreachable;
-                },
-            }
-        }
-    }
-
-    // Compile everything using pre/post condition blocks.
-    for (source_contexts) |*c, i| {
-        const source = sources[i];
-
-        for (source.definitions) |definition| {
-            switch (definition) {
-                .ClassDefinition => |cd| {
-                    unreachable;
-                },
-                .UnionDefinition => |ud| {
-                    unreachable;
-                },
-                .InterfaceDefinition => |id| {
-                    unreachable;
-                },
-            }
-        }
+    for (work.working_classes.items) |*working_class| {
+        unreachable;
     }
 
     return undefined;

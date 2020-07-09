@@ -36,9 +36,9 @@ pub const ObjectRedefinedErr = struct {
             .{ .Text = "` is defined for a second time in the `" },
             .{ .Text = self.package_iden.string() },
             .{ .Text = "` package" },
-            .{ .AtLocation = self.first_definition_location },
-            .{ .Text = "The first definition was" },
             .{ .AtLocation = self.second_definition_location },
+            .{ .Text = "The first definition was" },
+            .{ .AtLocation = self.first_definition_location },
         });
         return error.CompileError;
     }

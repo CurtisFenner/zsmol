@@ -765,20 +765,10 @@ pub const Definition = union(enum) {
 
 pub const ClassDefinition = struct {
     class_name: LeafTypeIden,
-    generics_opt: ?*const Generics,
+    generics: ?*const Generics,
     implements_ast: ?*const Implements,
     fields: []const Field,
     members: []const FunctionDef,
-
-    fn generics(self: ClassDefinition) Generics {
-        if (self.generics_opt) |g| {
-            return g.*;
-        }
-        return Generics{
-            .parameters = &[0]LeafTypeVar{},
-            .constraints = null,
-        };
-    }
 
     fn implements(self: *const ClassDefinition) []const Type {
         if (self.implements_ast) |i| {
@@ -790,7 +780,7 @@ pub const ClassDefinition = struct {
     pub const Parser = comb.fluent //
         .req("_", LeafKeyClass) //
         .req("class_name", LeafTypeIden).cut("Expected a class name after `class`") //
-        .opt("generics_opt", Generics) //
+        .opt("generics", Generics) //
         .opt("implements_ast", Implements) //
         .req("_", LeafPuncCurlyOpen).cut("Expected a `{` to begin a class's body") //
         .star("fields", Field) //

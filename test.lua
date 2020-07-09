@@ -253,6 +253,7 @@ for _, test in ipairs(tests) do
 			}
 		else
 			assert(type(message) == "string")
+			print()
 			FAIL {
 				name = test.id,
 				message = message,
