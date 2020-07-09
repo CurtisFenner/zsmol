@@ -175,6 +175,15 @@ test "tests/negative/syntax/empty-match" {
     assert(40 == try mainInterpret(allocator, &args));
 }
 
+test "tests/negative/scope/class-reuses-type-parameter-name" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = &arena.allocator;
+
+    var args = [_][]const u8{"C:\\Users\\Curtis\\Desktop\\zsmol\\tests\\negative\\scope\\class-reuses-type-parameter-name\\test.smol"};
+    assert(40 == try mainInterpret(allocator, &args));
+}
+
 test "tests/negative/scope/interface-parameter-count-mismatch" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();

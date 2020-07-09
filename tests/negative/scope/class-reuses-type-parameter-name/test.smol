@@ -1,0 +1,9 @@
+package testing;
+
+class Foo[#A, #A] {}
+
+class Test {
+	fn main() Unit {
+		var x String = "foo";
+	}
+}

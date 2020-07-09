@@ -1,0 +1,11 @@
+package testing;
+
+class Alpha {
+}
+
+class Beta is Alpha {
+}
+
+class Test {
+
+}

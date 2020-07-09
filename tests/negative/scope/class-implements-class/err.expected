@@ -1,0 +1,7 @@
+ERROR:
+Only constraints can be implemented.
+However, a type is used at test.smol:6:15-6:20:
+         5 | 
+         6 | class Beta is Alpha {
+           |               ^^^^^
+         7 | }

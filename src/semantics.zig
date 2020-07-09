@@ -94,7 +94,14 @@ const Constraints = struct {
     on_variable: Identifier,
     constraints: std.ArrayList(ConstraintBinding),
 
-    fn deinit(self: *Constraints) void {
+    fn init(allocator: *std.mem.Allocator, parameter: Identifier) Constraints {
+        return Constraints{
+            .on_variable = parameter,
+            .constraints = std.ArrayList(ConstraintBinding).init(allocator),
+        };
+    }
+
+    fn deinit(self: Constraints) void {
         self.constraints.deinit();
     }
 };
@@ -106,24 +113,38 @@ const TypeVariableBinding = struct {
 
 const TypeParameterScope = struct {
     type_parameters_by_name: IdentifierMap(TypeVariableBinding),
-    type_parameter_names: std.ArrayList(Identifier),
     type_parameter_constraints: std.ArrayList(Constraints),
+    allocator: *std.mem.Allocator,
 
     fn init(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool) TypeParameterScope {
         return .{
+            .allocator = allocator,
             .type_parameters_by_name = IdentifierMap(TypeVariableBinding).init(allocator, identifier_pool),
-            .type_parameter_names = std.ArrayList(Identifier).init(allocator),
             .type_parameter_constraints = std.ArrayList(Constraints).init(allocator),
         };
     }
 
     fn deinit(self: *TypeParameterScope) void {
         self.type_parameters_by_name.deinit();
-        self.type_parameter_names.deinit();
         for (self.type_parameter_constraints) |c| {
             c.deinit();
         }
         self.type_parameter_constraints.deinit();
+    }
+
+    fn defineTypeParameter(self: *TypeParameterScope, parameter: grammar.LeafTypeVar, error_message: *ErrorMessage) !void {
+        if (self.type_parameters_by_name.get(parameter.value)) |existing_binding| {
+            return compile_errors.TypeParameterRedefinedErr.err(error_message, .{
+                .first_binding_location = existing_binding.binding_location,
+                .second_binding_location = parameter.location,
+                .type_parameter_name = parameter.value,
+            });
+        }
+        try self.type_parameters_by_name.put(parameter.value, TypeVariableBinding{
+            .type_variable_id = .{ .id = self.type_parameter_constraints.items.len },
+            .binding_location = parameter.location,
+        });
+        try self.type_parameter_constraints.append(Constraints.init(self.allocator, parameter.value));
     }
 };
 
@@ -591,7 +612,7 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
     for (work.working_classes.items) |*working_class| {
         if (working_class.ast.generics) |generics| {
             for (generics.parameters) |parameter| {
-                unreachable;
+                try working_class.type_parameter_scope.defineTypeParameter(parameter, error_message);
             }
             if (generics.constraints) |constraints| {
                 for (constraints.constraints) |constraint| {

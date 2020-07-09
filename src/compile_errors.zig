@@ -156,3 +156,21 @@ pub const UnknownUnqualifiedObjectReferencedErr = struct {
         return error.CompileError;
     }
 };
+
+pub const TypeParameterRedefinedErr = struct {
+    type_parameter_name: Identifier,
+    first_binding_location: Location,
+    second_binding_location: Location,
+
+    pub fn err(error_message: *ErrorMessage, self: @This()) error{CompileError} {
+        error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+            .{ .Text = "The type parameter `#" },
+            .{ .Text = self.type_parameter_name.string() },
+            .{ .Text = "` is defined for a second time" },
+            .{ .AtLocation = self.second_binding_location },
+            .{ .Text = "The first definition was" },
+            .{ .AtLocation = self.first_binding_location },
+        });
+        return error.CompileError;
+    }
+};
