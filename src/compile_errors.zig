@@ -3,6 +3,11 @@ const parser = @import("parser.zig");
 const Location = parser.Location;
 const ErrorMessage = parser.ErrorMessage;
 
+pub const FullObjectName = struct {
+    package_name: Identifier,
+    object_name: Identifier,
+};
+
 pub const ImportUnknownObjectErr = struct {
     object_iden: Identifier,
     package_iden: Identifier,
@@ -170,6 +175,32 @@ pub const TypeParameterRedefinedErr = struct {
             .{ .AtLocation = self.second_binding_location },
             .{ .Text = "The first definition was" },
             .{ .AtLocation = self.first_binding_location },
+        });
+        return error.CompileError;
+    }
+};
+
+pub const WrongNumberOfTypeParametersErr = struct {
+    full_object_name: FullObjectName,
+    object_generics_location: Location,
+    given_count: isize,
+    declared_count: isize,
+    instantiation_location: Location,
+
+    pub fn err(error_message: *ErrorMessage, self: @This()) error{CompileError} {
+        error_message.* = ErrorMessage.make(&[_]ErrorMessage.Entry{
+            .{ .Text = "The object `" },
+            .{ .Text = self.full_object_name.package_name.string() },
+            .{ .Text = ":" },
+            .{ .Text = self.full_object_name.object_name.string() },
+            .{ .Text = "` was given " },
+            .{ .Integer = self.given_count },
+            .{ .Text = " type parameter(s)" },
+            .{ .AtLocation = self.instantiation_location },
+            .{ .Text = "However, that object was defined to take " },
+            .{ .Integer = self.declared_count },
+            .{ .Text = " type parameter(s)" },
+            .{ .AtLocation = self.object_generics_location },
         });
         return error.CompileError;
     }

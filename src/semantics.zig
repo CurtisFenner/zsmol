@@ -16,6 +16,8 @@ const IdentifierPool = @import("identifiers.zig").IdentifierPool;
 const IdentifierMap = @import("identifiers.zig").IdentifierMap;
 const compile_errors = @import("compile_errors.zig");
 
+const FullObjectName = compile_errors.FullObjectName;
+
 const ObjectID = union(enum) {
     ClassID: ClassID,
     UnionID: UnionID,
@@ -146,6 +148,12 @@ const TypeParameterScope = struct {
         });
         try self.type_parameter_constraints.append(Constraints.init(self.allocator, parameter.value));
     }
+
+    fn introduceTypeParameters(self: *TypeParameterScope, generics: *const grammar.Generics, error_message: *ErrorMessage) !void {
+        for (generics.parameters) |parameter| {
+            try self.defineTypeParameter(parameter, error_message);
+        }
+    }
 };
 
 const WorkingClass = struct {
@@ -186,6 +194,10 @@ const WorkingClass = struct {
             .implements = std.ArrayList(Constraint).init(allocator),
         };
     }
+
+    fn getName(self: *const WorkingClass) Identifier {
+        return self.ast.class_name.value;
+    }
 };
 
 const WorkingInterface = struct {
@@ -201,6 +213,17 @@ const WorkingInterface = struct {
     ast: *const grammar.InterfaceDefinition,
 
     type_parameter_scope: TypeParameterScope,
+
+    fn init(allocator: *std.mem.Allocator, pool: *IdentifierPool, id: usize, package_id: PackageID, source_id: SourceID, ast: *const grammar.InterfaceDefinition) WorkingInterface {
+        return WorkingInterface{
+            .id = id,
+            .package_id = package_id,
+            .source_id = source_id,
+            .ast = ast,
+
+            .type_parameter_scope = TypeParameterScope.init(allocator, pool),
+        };
+    }
 
     fn getPackageName(self: *const WorkingInterface, work: *Work) Identifier {
         return work.getPackage(self.package_id).package_name;
@@ -268,6 +291,26 @@ const Work = struct {
 
     package_ids_by_name: IdentifierMap(usize),
 
+    fn getFullObjectName(self: *Work, object_id: ObjectID) FullObjectName {
+        switch (object_id) {
+            .ClassID => |c| {
+                const working_class = self.getClass(c);
+                return .{
+                    .object_name = working_class.getName(),
+                    .package_name = self.getPackage(working_class.package_id).package_name,
+                };
+            },
+            .UnionID => unreachable,
+            .InterfaceID => |i| {
+                const working_interface = self.getInterface(i);
+                return .{
+                    .object_name = working_interface.getName(),
+                    .package_name = self.getPackage(working_interface.package_id).package_name,
+                };
+            },
+        }
+    }
+
     fn getPackage(self: *Work, package_id: PackageID) *WorkingPackage {
         return &self.working_packages.items[package_id.id];
     }
@@ -302,15 +345,17 @@ const Work = struct {
         ));
         return id;
     }
+
     fn addInterface(self: *Work, package_id: PackageID, source_id: SourceID, ast: *const grammar.InterfaceDefinition) !InterfaceID {
         const id = InterfaceID{ .id = self.working_interfaces.items.len };
-        try self.working_interfaces.append(WorkingInterface{
-            .id = self.working_interfaces.items.len,
-            .package_id = package_id,
-            .source_id = source_id,
-            .ast = ast,
-            .type_parameter_scope = TypeParameterScope.init(self.top_allocator, self.pool),
-        });
+        try self.working_interfaces.append(WorkingInterface.init(
+            self.top_allocator,
+            self.pool,
+            self.working_interfaces.items.len,
+            package_id,
+            source_id,
+            ast,
+        ));
         return id;
     }
 
@@ -450,15 +495,19 @@ const SourceContext = struct {
                     object_id = try self.resolveUnqualifiedObject(work, concrete_ast.object, error_message);
                 }
 
+                var base_full_object_name = work.getFullObjectName(object_id);
+                var base_generics_location: Location = undefined;
                 var argument_constraints: std.ArrayList(Constraints) = undefined;
                 switch (object_id) {
                     .ClassID => |class_id| {
                         const base_class = work.getClass(class_id);
+                        base_generics_location = if (base_class.ast.generics) |g| g.location else base_class.ast.class_name.location;
                         argument_constraints = base_class.type_parameter_scope.type_parameter_constraints;
                     },
                     .UnionID => |ui| unreachable,
                     .InterfaceID => |interface_id| {
                         const base_interface = work.getInterface(interface_id);
+                        base_generics_location = if (base_interface.ast.generics) |g| g.location else base_interface.ast.interface_name.location;
                         argument_constraints = base_interface.type_parameter_scope.type_parameter_constraints;
                     },
                 }
@@ -470,6 +519,16 @@ const SourceContext = struct {
                     type_arguments = try work.arena.allocator.alloc(TypeLike, concrete_ast.arguments().len);
                 } else {
                     type_arguments = &[0]TypeLike{};
+                }
+
+                if (argument_constraints.items.len != ast_arguments.len) {
+                    return compile_errors.WrongNumberOfTypeParametersErr.err(error_message, .{
+                        .full_object_name = base_full_object_name,
+                        .object_generics_location = base_generics_location,
+                        .given_count = @intCast(isize, ast_arguments.len),
+                        .declared_count = @intCast(isize, argument_constraints.items.len),
+                        .instantiation_location = concrete_ast.location,
+                    });
                 }
 
                 for (ast_arguments) |a, i| {
@@ -611,9 +670,7 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
     // Resolve all type-argument constraints.
     for (work.working_classes.items) |*working_class| {
         if (working_class.ast.generics) |generics| {
-            for (generics.parameters) |parameter| {
-                try working_class.type_parameter_scope.defineTypeParameter(parameter, error_message);
-            }
+            try working_class.type_parameter_scope.introduceTypeParameters(generics, error_message);
             if (generics.constraints) |constraints| {
                 for (constraints.constraints) |constraint| {
                     unreachable;
@@ -623,9 +680,7 @@ pub fn semantics(allocator: *std.mem.Allocator, identifier_pool: *IdentifierPool
     }
     for (work.working_interfaces.items) |*working_interface| {
         if (working_interface.ast.generics) |generics| {
-            for (generics.parameters) |parameter| {
-                unreachable;
-            }
+            try working_interface.type_parameter_scope.introduceTypeParameters(generics, error_message);
             if (generics.constraints) |constraints| {
                 for (constraints.constraints) |constraint| {
                     unreachable;

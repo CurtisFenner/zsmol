@@ -1,0 +1,9 @@
+package testing;
+
+class Test {
+
+}
+
+interface I[#A, #B] {}
+
+class C is I[Boolean] {}

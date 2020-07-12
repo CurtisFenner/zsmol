@@ -196,6 +196,7 @@ pub const ErrorMessage = struct {
     pub const Entry = union(enum) {
         Text: []const u8,
         AtLocation: Location,
+        Integer: isize,
     };
 
     entry_count: usize,
@@ -213,6 +214,7 @@ pub const ErrorMessage = struct {
                     try loc.printExcerpt(file);
                     if (i + 1 != e.entry_count) try file.writeAll("\n");
                 },
+                .Integer => |value| try std.fmt.formatIntValue(value, "", std.fmt.FormatOptions{}, file),
             }
         }
     }
