@@ -6,7 +6,6 @@ const std = @import("std");
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 const TypeInfo = @import("builtin").TypeInfo;
-const TypeId = @import("builtin").TypeId;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -39,7 +38,7 @@ pub const Location = struct {
     /// Prints this location as a phase in the format
     /// `"filename:startline:startcol-endline:endcol"` to the given file.
     /// For example, `"dir/file.txt:10:15-10:20"`.
-    pub fn printPosition(location: Location, file: var, diagnostic_base: ?[]const u8) !void {
+    pub fn printPosition(location: Location, file: anytype, diagnostic_base: ?[]const u8) !void {
         var start_line: usize = 0;
         var start_column: usize = 0;
         var end_line: usize = 1;
@@ -73,20 +72,20 @@ pub const Location = struct {
         try file.writeAll(":");
         var buffer = [_]u8{0} ** 32;
         const format = std.fmt.FormatOptions{};
-        var width = std.fmt.formatIntBuf(&buffer, start_line, 10, false, format);
+        var width = std.fmt.formatIntBuf(&buffer, start_line, 10, .lower, format);
         try file.writeAll(buffer[0..width]);
         try file.writeAll(":");
-        width = std.fmt.formatIntBuf(&buffer, start_column, 10, false, format);
+        width = std.fmt.formatIntBuf(&buffer, start_column, 10, .lower, format);
         try file.writeAll(buffer[0..width]);
         try file.writeAll("-");
-        width = std.fmt.formatIntBuf(&buffer, end_line, 10, false, format);
+        width = std.fmt.formatIntBuf(&buffer, end_line, 10, .lower, format);
         try file.writeAll(buffer[0..width]);
         try file.writeAll(":");
-        width = std.fmt.formatIntBuf(&buffer, end_column, 10, false, format);
+        width = std.fmt.formatIntBuf(&buffer, end_column, 10, .lower, format);
         try file.writeAll(buffer[0..width]);
     }
 
-    pub fn printExcerpt(location: Location, file: var) !void {
+    pub fn printExcerpt(location: Location, file: anytype) !void {
         var line: usize = 0;
         var line_begin: usize = undefined;
         var line_end: usize = undefined;
@@ -111,7 +110,7 @@ pub const Location = struct {
             const should_draw_line = line_begin <= line + LINE_CONTEXT and line <= line_end + LINE_CONTEXT;
             if (should_draw_line and beginning_of_line) {
                 var buffer = [_]u8{0} ** 32;
-                const width = std.fmt.formatIntBuf(&buffer, line + 1, 10, false, std.fmt.FormatOptions{});
+                const width = std.fmt.formatIntBuf(&buffer, line + 1, 10, .lower, std.fmt.FormatOptions{});
                 var padding = LINE_NUM_WIDTH - width;
                 while (padding != 0) {
                     try file.writeAll(" ");
@@ -202,7 +201,7 @@ pub const ErrorMessage = struct {
     entry_count: usize,
     entries_storage: [64]Entry = undefined,
 
-    pub fn render(e: ErrorMessage, file: var, diagnostic_base: ?[]const u8) !void {
+    pub fn render(e: ErrorMessage, file: anytype, diagnostic_base: ?[]const u8) !void {
         try file.writeAll("ERROR:\n");
         for (e.entries_storage[0..e.entry_count]) |entry, i| {
             switch (entry) {
@@ -214,7 +213,7 @@ pub const ErrorMessage = struct {
                     try loc.printExcerpt(file);
                     if (i + 1 != e.entry_count) try file.writeAll("\n");
                 },
-                .Integer => |value| try std.fmt.formatIntValue(value, "", std.fmt.FormatOptions{}, file),
+                .Integer => |value| try std.fmt.formatIntValue(value, "", std.fmt.FormatOptions{}, file.writer()),
             }
         }
     }
@@ -231,7 +230,7 @@ pub fn Combinators(comptime Token: type) type {
     return struct {
         /// A Stream represents a tokenized text source.
         pub const Stream = struct {
-            allocator: *std.mem.Allocator,
+            allocator: ?std.mem.Allocator = null,
 
             /// The tokens in the stream.
             tokens: []const Token,
@@ -242,11 +241,15 @@ pub fn Combinators(comptime Token: type) type {
             locations: []const Location,
 
             fn deinit(self: Stream) void {
-                self.allocator.free(self.locations);
-                for (self.tokens) |token| {
-                    token.deinit(self.allocator);
+                if (self.allocator) |allocator| {
+                    allocator.free(self.locations);
+                    if (@hasDecl(Token, "deinit")) {
+                        for (self.tokens) |token| {
+                            token.deinit(allocator);
+                        }
+                    }
+                    allocator.free(self.tokens);
                 }
-                self.allocator.free(self.tokens);
             }
         };
 
@@ -454,9 +457,13 @@ pub fn Combinators(comptime Token: type) type {
         pub const EofParser = struct {
             nothing: usize,
             pub const Parser = struct {
-                pub fn _deinit(allocator: *std.mem.Allocator, self: EofParser) void {}
+                pub fn _deinit(allocator: std.mem.Allocator, self: EofParser) void {
+                    _ = allocator;
+                    _ = self;
+                }
 
-                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(EofParser) {
+                pub fn _parse(allocator: std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(EofParser) {
+                    _ = allocator;
                     if (stream.tokens.len != from) {
                         return InternalParseUnion(EofParser){ .NoMatch = {} };
                     }
@@ -468,11 +475,15 @@ pub fn Combinators(comptime Token: type) type {
         };
 
         /// A parser that matches a single token of the given type.
-        pub fn TokenParser(comptime Into: type, comptime pattern: @TagType(Token)) type {
+        pub fn TokenParser(comptime Into: type, comptime pattern: std.meta.Tag(Token)) type {
             return struct {
-                pub fn deinit(allocator: *std.mem.Allocator, self: Into) void {}
+                pub fn free(allocator: std.mem.Allocator, self: Into) void {
+                    _ = allocator;
+                    _ = self;
+                }
 
-                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
+                pub fn _parse(allocator: std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
+                    _ = allocator;
                     if (stream.tokens.len == from) {
                         return InternalParseUnion(Into){ .NoMatch = {} };
                     }
@@ -495,34 +506,34 @@ pub fn Combinators(comptime Token: type) type {
 
         pub fn ChoiceParser(comptime Into: type) type {
             return struct {
-                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
+                pub fn _parse(allocator: std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
                     const fields = std.meta.fields(Into);
                     inline for (fields) |field| {
-                        if (comptime std.meta.activeTag(@typeInfo(field.field_type)) != TypeId.Pointer or !@typeInfo(field.field_type).Pointer.is_const) {
-                            @compileError("ChoiceParser requires field `" ++ field.name ++ "` in `" ++ @typeName(Into) ++ "` to be a const pointer");
+                        const FieldTypeR: std.builtin.Type = comptime @typeInfo(field.field_type);
+                        comptime {
+                            if (!std.meta.isTag(FieldTypeR, "Pointer") or !FieldTypeR.Pointer.is_const) {
+                                @compileError("ChoiceParser requires field `" ++ field.name ++ "` in `" ++ @typeName(Into) ++ "` to be a const pointer");
+                            }
                         }
-                        const FieldType = @typeInfo(field.field_type).Pointer.child;
-                        // TODO(#2727): Shouldn't really need inline.
-                        const never_inline_modifier: std.builtin.CallOptions = std.builtin.CallOptions{ .modifier = .never_inline };
-                        const result = try @call(never_inline_modifier, FieldType.Parser._parse, .{ allocator, stream, from });
-                        // TODO(#2727): Use a switch.
-                        const Tags = @TagType(@TypeOf(result));
-                        const tag = @as(Tags, result);
-                        if (tag == Tags.Result) {
-                            var ptr = try allocator.create(@TypeOf(result.Result.value));
-                            ptr.* = result.Result.value;
-                            return InternalParseUnion(Into){
-                                .Result = InternalParseResult(Into){
-                                    .value = @unionInit(Into, field.name, ptr),
-                                    .consumed = result.Result.consumed,
-                                },
-                            };
-                        } else if (tag == Tags.NoMatch) {
-                            // Continue to the next variant.
-                        } else if (tag == Tags.Error) {
-                            return InternalParseUnion(Into){ .Error = result.Error };
-                        } else {
-                            assert(false);
+                        const FieldType = FieldTypeR.Pointer.child;
+                        const result = try FieldType.Parser._parse(allocator, stream, from);
+                        switch (result) {
+                            .Result => |Result| {
+                                var ptr = try allocator.create(@TypeOf(Result.value));
+                                ptr.* = Result.value;
+                                return InternalParseUnion(Into){
+                                    .Result = InternalParseResult(Into){
+                                        .value = @unionInit(Into, field.name, ptr),
+                                        .consumed = Result.consumed,
+                                    },
+                                };
+                            },
+                            .Error => |Error| {
+                                return InternalParseUnion(Into){ .Error = Error };
+                            },
+                            .NoMatch => {
+                                // Continue to the next variant.
+                            },
                         }
                     }
                     return InternalParseUnion(Into){ .NoMatch = {} };
@@ -536,7 +547,7 @@ pub fn Combinators(comptime Token: type) type {
             }
 
             return struct {
-                pub fn parse(allocator: *std.mem.Allocator, stream: Stream, parse_error: *ErrorMessage) error{
+                pub fn parse(allocator: std.mem.Allocator, stream: Stream, parse_error: *ErrorMessage) error{
                     OutOfMemory,
                     ParseError,
                 }!Into {
@@ -565,10 +576,10 @@ pub fn Combinators(comptime Token: type) type {
                     }
                 }
 
-                fn _parseField(comptime field: Field, result: var, stream: Stream, from: usize, consumed: *usize, allocator: *std.mem.Allocator) error{OutOfMemory}!FieldResultUnion {
+                fn _parseField(comptime field: Field, result: anytype, stream: Stream, from: usize, consumed: *usize, allocator: std.mem.Allocator) error{OutOfMemory}!FieldResultUnion {
                     // Parse a repeated field.
-                    // TODO: Recover list's memory.
                     var list = std.ArrayList(field.CT).init(allocator);
+                    defer list.deinit();
 
                     while (field.max_take_count <= 0 or list.items.len < field.max_take_count) {
                         // Parse a separator, if any.
@@ -576,11 +587,12 @@ pub fn Combinators(comptime Token: type) type {
                         if (comptime field.separator) |sep| {
                             if (list.items.len != 0) {
                                 const separator = try sep.Parser._parse(allocator, stream, from + consumed.*);
-                                // TODO: free separator's memory
+
                                 switch (separator) {
                                     .Result => |r| {
                                         consumed.* += r.consumed;
                                         sep_consumed = r.consumed;
+                                        sep.Parser.free(allocator, r.value);
                                     },
                                     .NoMatch => {
                                         break;
@@ -626,48 +638,57 @@ pub fn Combinators(comptime Token: type) type {
                     // Attach the sub-result onto the AST.
                     if (comptime std.mem.eql(u8, "_", field.name)) {
                         assert(field.max_take_count == 1);
-                        // TODO: Free the memory of the elements in the list
                     } else {
                         if (field.max_take_count == 1) {
                             if (field.min_take_count == 0) {
                                 if (list.items.len == 1) {
-                                    // TODO: Recover memory?
-                                    @field(result, field.name) = &list.items[0];
+                                    @field(result, field.name) = list.items[0];
                                 } else {
-                                    // TODO: Recover memory?
                                     @field(result, field.name) = null;
                                 }
                             } else {
-                                // TODO: Recover memory
                                 @field(result, field.name) = list.items[0];
                             }
                         } else {
-                            @field(result, field.name) = list.items;
+                            // TODO: Recover memory
+                            var a = (try list.clone());
+                            @field(result, field.name) = a.items;
                         }
                     }
                     return FieldResultUnion{ .Success = {} };
                 }
 
-                pub fn _parse(allocator: *std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
+                fn _freeField(comptime field: Field, allocator: std.mem.Allocator, result: anytype) void {
+                    if (comptime std.mem.eql(u8, "_", field.name)) {} else {
+                        if (field.max_take_count == 1) {} else {
+                            allocator.free(@field(result, field.name));
+                        }
+                    }
+                }
+
+                pub fn free(allocator: std.mem.Allocator, result: Into) void {
+                    inline for (fields) |field| {
+                        _freeField(field, allocator, result);
+                    }
+                }
+
+                pub fn _parse(allocator: std.mem.Allocator, stream: Stream, from: usize) error{OutOfMemory}!InternalParseUnion(Into) {
                     var result: Into = undefined;
                     var consumed: usize = 0;
                     // TODO: Use a bump-allocator that doesn't require recursive deallocation.
 
-                    // TODO(ziglang #5170):
                     inline for (fields) |field| {
-                        comptime const never_inline_modifier = std.builtin.CallOptions{ .modifier = .never_inline };
-                        const r = try @call(never_inline_modifier, @This()._parseField, .{ field, &result, stream, from, &consumed, allocator });
-                        const Tags = @TagType(@TypeOf(r));
-                        const tag = @as(Tags, r);
-                        // TODO(#2727)
-                        if (tag == Tags.Success) {
-                            // Continue to the next field.
-                        } else if (tag == Tags.Fail) {
-                            return InternalParseUnion(Into){ .NoMatch = {} };
-                        } else if (tag == Tags.Error) {
-                            return InternalParseUnion(Into){ .Error = r.Error };
-                        } else {
-                            assert(false);
+                        const r = try _parseField(field, &result, stream, from, &consumed, allocator);
+                        switch (r) {
+                            .Success => {
+                                // Continue to the next field.
+                            },
+                            .Fail => {
+                                return InternalParseUnion(Into){ .NoMatch = {} };
+                            },
+                            .Error => |Error| {
+                                return InternalParseUnion(Into){ .Error = Error };
+                            },
                         }
                     }
 
@@ -696,32 +717,31 @@ test "Separator" {
     const comb = Combinators(Token);
 
     const A = struct {
-        value: void,
         const Parser = comb.TokenParser(@This(), Token.A);
+        value: void,
         location: Location,
     };
     const B = struct {
-        value: void,
         const Parser = comb.TokenParser(@This(), Token.B);
+        value: void,
         location: Location,
     };
 
     const C = struct {
-        list: []const A,
         const Parser = comb.fluent.plusSep("list", A, B).seq(@This());
+        list: []const A,
         location: Location,
     };
 
     const stream = comb.Stream{
-        .allocator = undefined,
         .tokens = &[_]Token{Token{ .A = {} }},
         .locations = &[_]Location{ undefined, undefined },
     };
+    defer stream.deinit();
 
-    var buffer: [4000]u8 = undefined;
-    var buffer_allocator = std.heap.FixedBufferAllocator.init(&buffer);
-    var allocator = &buffer_allocator.allocator;
+    var allocator = std.testing.allocator;
     const result = try C.Parser.parse(allocator, stream, undefined);
+    defer C.Parser.free(allocator, result);
 }
 
 test "Lisp" {
@@ -734,7 +754,7 @@ test "Lisp" {
     const comb = Combinators(Token);
 
     const Lexer = struct {
-        fn tokenize(allocator: *std.mem.Allocator, blob: *const Blob) !comb.Stream {
+        fn tokenize(allocator: std.mem.Allocator, blob: *const Blob) !comb.Stream {
             var tokens = std.ArrayList(Token).init(allocator);
             var locations = std.ArrayList(Location).init(allocator);
             for (blob.content) |c, i| {
@@ -761,18 +781,18 @@ test "Lisp" {
 
     const AST = struct {
         const Open = struct {
-            value: void,
             const Parser = comb.TokenParser(@This(), Token.TOpen);
+            value: void,
             location: Location,
         };
         const Close = struct {
-            value: void,
             const Parser = comb.TokenParser(@This(), Token.TClose);
+            value: void,
             location: Location,
         };
         const Atom = struct {
-            value: []const u8,
             const Parser = comb.TokenParser(@This(), Token.TAtom);
+            value: []const u8,
             location: Location,
         };
         const Expr = union(enum) {
@@ -781,23 +801,22 @@ test "Lisp" {
             const Parser = comb.ChoiceParser(@This());
         };
         const Phrase = struct {
-            open: Open,
-            args: []const Expr,
-            close: Close,
             const Parser = comb.fluent //
                 .req("open", Open) //
                 .star("args", Expr) //
                 .req("close", Close).cut("need `)`") //
                 .seq(@This());
+            open: Open,
+            args: []const Expr,
+            close: Close,
             location: Location,
         };
     };
 
-    var buffer: [4000]u8 = undefined;
-    var buffer_allocator = std.heap.FixedBufferAllocator.init(&buffer);
-    var allocator = &buffer_allocator.allocator;
+    var allocator = std.testing.allocator;
     const blob = Blob{ .name = "test", .content = "(a (b c d) (e f) () g)" };
     const stream = try Lexer.tokenize(allocator, &blob);
+    defer stream.deinit();
 
     var parse_error: ErrorMessage = undefined;
 
@@ -809,6 +828,8 @@ test "Lisp" {
         },
         error.OutOfMemory => |e| return e,
     };
+    defer AST.Phrase.Parser.free(allocator, result);
+
     assert(result.args.len == 5);
     assert(std.mem.eql(u8, result.args[0].Atom.value, "a"));
     assert(result.args[1].Phrase.args.len == 3);
